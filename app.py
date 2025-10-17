@@ -155,6 +155,103 @@ async def health_check():
     }
 
 
+@app.post("/api/classify/video")
+async def classify_video(file: UploadFile = File(...)):
+    """
+    Classify vehicles from an uploaded video using tripline pulse counting.
+    
+    Args:
+        file: Uploaded video file (mp4, avi, mov)
+    
+    Returns:
+        List of classification results with accurate axle counts
+    """
+    if not detector:
+        raise HTTPException(status_code=500, detail="Model not loaded")
+    
+    import cv2
+    from classification.axle_counter import AxleCounter
+    
+    # Save uploaded video
+    file_id = str(uuid.uuid4())
+    file_ext = Path(file.filename).suffix or ".mp4"
+    video_path = settings.upload_dir / f"{file_id}{file_ext}"
+    
+    contents = await file.read()
+    video_path.write_bytes(contents)
+    
+    try:
+        # Open video
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise HTTPException(status_code=400, detail="Could not open video file")
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS)) or 25
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Initialize axle counter with tripline
+        axle_counter = AxleCounter(fps=fps)
+        
+        results = []
+        frame_idx = 0
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Detect vehicles in frame
+            detections = detector.detect_vehicles(frame)
+            
+            # Process frame with axle counter
+            classification_result = axle_counter.process_frame(frame, detections)
+            
+            if classification_result:
+                # Vehicle finished crossing - save result
+                timestamp = frame_idx / fps
+                
+                # Save to database
+                db = await get_database()
+                classification_id = await db.save_classification(
+                    vehicle_type=classification_result["vehicle_type"],
+                    axle_count=classification_result["axle_count"],
+                    predicted_class=classification_result["predicted_class"],
+                    confidence=classification_result["confidence"],
+                    processing_time=0.0,
+                    image_url=None,
+                    annotated_image_url=None
+                )
+                
+                results.append({
+                    "id": classification_id,
+                    "timestamp": timestamp,
+                    "vehicle_type": classification_result["vehicle_type"],
+                    "axle_count": classification_result["axle_count"],
+                    "predicted_class": classification_result["predicted_class"],
+                    "confidence": classification_result["confidence"],
+                    "pulse_count": classification_result["pulse_count"]
+                })
+            
+            frame_idx += 1
+        
+        cap.release()
+        
+        return {
+            "total_vehicles": len(results),
+            "total_frames": total_frames,
+            "fps": fps,
+            "duration_seconds": total_frames / fps,
+            "classifications": results
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video processing error: {str(e)}")
+    finally:
+        # Cleanup
+        if video_path.exists():
+            video_path.unlink()
+
+
 @app.post("/api/classify/image")
 async def classify_image(file: UploadFile = File(...)):
     """
