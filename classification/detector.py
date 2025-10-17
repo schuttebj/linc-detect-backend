@@ -133,8 +133,15 @@ class VehicleDetector:
                 image_height
             )
             
-            # Determine toll class
-            predicted_class = toll_class(class_name, estimated_axles, False)
+            # Determine toll class with size-based classification for 2-axle vehicles
+            predicted_class = toll_class(
+                class_name, 
+                estimated_axles, 
+                False,
+                bbox_height=bbox_height,
+                bbox_width=bbox_width,
+                image_height=image_height
+            )
             
             detection = {
                 "vehicle_type": class_name,

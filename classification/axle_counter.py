@@ -159,10 +159,23 @@ class AxleCounter:
             axle_count = self._count_axles_from_pulses(self.pulse_frames)
             vehicle_type = self.crossing_vehicle.get("vehicle_type", "unknown") if self.crossing_vehicle else "unknown"
             
+            # Get bbox info for size-based classification
+            bbox = self.crossing_vehicle.get("bbox") if self.crossing_vehicle else None
+            bbox_height = bbox.get("height") if bbox else None
+            bbox_width = bbox.get("width") if bbox else None
+            image_height = frame.shape[0] if frame is not None else None
+            
             result = {
                 "vehicle_type": vehicle_type,
                 "axle_count": axle_count,
-                "predicted_class": toll_class(vehicle_type, axle_count, False),
+                "predicted_class": toll_class(
+                    vehicle_type, 
+                    axle_count, 
+                    False,
+                    bbox_height=bbox_height,
+                    bbox_width=bbox_width,
+                    image_height=image_height
+                ),
                 "confidence": self.crossing_vehicle.get("confidence", 0.0) if self.crossing_vehicle else 0.0,
                 "frame_end": self.frame_idx,
                 "pulse_count": len(self.pulse_frames)  # Debug info
