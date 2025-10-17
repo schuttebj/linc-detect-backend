@@ -6,10 +6,15 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import numpy as np
+import torch
 from ultralytics import YOLO
+from ultralytics.nn.tasks import DetectionModel
 from PIL import Image
 
 from .rules import toll_class, estimate_axles_from_detection
+
+# Allow Ultralytics classes for PyTorch 2.6+ weights_only loading
+torch.serialization.add_safe_globals([DetectionModel])
 
 
 class VehicleDetector:
