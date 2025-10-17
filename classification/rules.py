@@ -94,18 +94,15 @@ def estimate_axles_from_detection(
     
     # Heavy vehicles - use size heuristics
     if vt in ("bus", "truck"):
-        # Very long vehicles (articulated trucks)
-        if aspect_ratio > 3.5:
-            return 5  # Likely articulated
-        # Long vehicles
-        elif aspect_ratio > 2.5:
-            return 4
-        # Medium vehicles
-        elif aspect_ratio > 1.8:
-            return 3
+        # Very long vehicles (articulated trucks) - assume 5+ axles
+        if aspect_ratio > 3.0:
+            return 5  # Likely articulated with trailer
+        # Long vehicles - but be conservative
+        elif aspect_ratio > 2.2:
+            return 3  # Could be 3-4 axles
         # Standard heavy vehicles
         else:
-            return 2
+            return 2  # Standard 2-axle truck/bus
     
     # Default for unknown types
     return 2
