@@ -20,9 +20,9 @@ LIGHT_TYPES = {"car", "pickup", "bakkie", "suv", "minibus", "van", "motorcycle"}
 HEAVY_TYPES = {"truck", "bus", "lorry", "tractor"}
 
 # Thresholds for visual feature analysis
-BOXINESS_THRESHOLD = 0.15        # Edge density in rectangular regions
+BOXINESS_THRESHOLD = 0.18        # Edge density in rectangular regions (higher = stricter)
 DUAL_WHEEL_THRESHOLD = 0.12      # Dark region pattern at rear wheels
-LOWER_ASPECT_THRESHOLD = 3.5     # Aspect ratio of bottom 40% of vehicle (chassis length)
+LOWER_ASPECT_THRESHOLD = 5.0     # Aspect ratio of bottom 40% of vehicle (very long chassis only)
 
 
 def calculate_boxiness_score(crop: np.ndarray) -> float:
@@ -242,28 +242,36 @@ def toll_class(
     """
     vt = (vehicle_type or "").lower()
     
-    # Always trust clear axle thresholds first
+    # PRIORITY 1: Motorcycles are ALWAYS Class 1 (check before axle logic)
+    if vt == "motorcycle":
+        return "Class 1"
+    
+    # PRIORITY 2: Clear axle thresholds
     if axle_count >= 5:
         return "Class 4"
     
     if axle_count in (3, 4):
         return "Class 3"
     
-    # Two-axle cases - use visual feature classification
+    # PRIORITY 3: Two-axle cases - use visual feature classification
     if axle_count == 2:
-        # If we have size info, use intelligent classification with visual features
+        # Cars, SUVs, vans are ALWAYS Class 1 (light vehicles)
+        if vt in ("car", "suv", "van", "pickup", "bakkie", "minibus"):
+            return "Class 1"
+        
+        # For "truck" or "bus" label (might be wrong), use visual features
         if bbox_height and bbox_width and image_height:
             return classify_2axle_vehicle(
                 vt, bbox_height, bbox_width, image_height, vehicle_crop
             )
         
-        # Fallback without size info (shouldn't happen with image classification)
+        # Fallback without size info: conservative default to heavy
         if vt in HEAVY_TYPES:
             return "Class 2"
         return "Class 1"
     
-    # One axle (motorcycle) or unknown axle_count with type hints
-    if vt in LIGHT_TYPES or vt == "motorcycle":
+    # PRIORITY 4: Unknown axle count - use type hints
+    if vt in LIGHT_TYPES:
         return "Class 1"
     
     # Fallback: if we only know "truck/bus" but axle_count failed, be conservative
@@ -282,7 +290,11 @@ def estimate_axles_from_detection(
 ) -> int:
     """
     Estimate axle count from vehicle detection bounding box.
-    This is a heuristic fallback when tripline counting isn't available.
+    This is a CONSERVATIVE heuristic for uploaded images (not tripline counting).
+    
+    IMPORTANT: For uploaded images, we default to 2 axles and let the 
+    visual feature classifier (classify_2axle_vehicle) determine Class 1 vs Class 2.
+    Only estimate 3+ axles if there's VERY strong evidence (extremely long articulated vehicles).
     
     Args:
         vehicle_type: Detected vehicle type
@@ -291,34 +303,33 @@ def estimate_axles_from_detection(
         image_height: Total image height in pixels
     
     Returns:
-        Estimated axle count
+        Estimated axle count (conservative, defaults to 2)
     """
     vt = vehicle_type.lower()
     
-    # Calculate relative size
-    relative_height = bbox_height / image_height
+    # Calculate aspect ratio
     aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
     
-    # Motorcycle
+    # Motorcycles: Always 2 axles (will be classified as Class 1 by toll_class)
     if vt == "motorcycle":
         return 2
     
-    # Light vehicles (cars, SUVs, vans)
+    # Light vehicles: Always 2 axles (will be classified as Class 1 by visual features)
     if vt in LIGHT_TYPES:
         return 2
     
-    # Heavy vehicles - use size heuristics
+    # For vehicles labeled "truck" or "bus" (which might be wrong):
+    # Only estimate 3+ axles if EXTREMELY long (articulated)
+    # Otherwise default to 2 and let visual classifier handle it
     if vt in ("bus", "truck"):
-        # Very long vehicles (articulated trucks) - assume 5+ axles
-        if aspect_ratio > 3.0:
-            return 5  # Likely articulated with trailer
-        # Long vehicles - but be conservative
-        elif aspect_ratio > 2.2:
-            return 3  # Could be 3-4 axles
-        # Standard heavy vehicles
+        # ONLY if aspect ratio is EXTREMELY high (articulated truck + trailer visible)
+        # Use very conservative threshold to avoid false positives
+        if aspect_ratio > 4.5:  # Much higher threshold than before
+            return 5  # Clearly articulated with visible trailer
+        # Otherwise assume 2 axles and let visual classifier decide Class 1 vs Class 2
         else:
-            return 2  # Standard 2-axle truck/bus
+            return 2
     
-    # Default for unknown types
+    # Default: 2 axles (most conservative, avoid over-classifying)
     return 2
 
