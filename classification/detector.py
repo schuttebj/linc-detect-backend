@@ -31,6 +31,199 @@ except Exception as e:
     print("Model loading will proceed with default PyTorch settings")
 
 
+def detect_trailer_connection(
+    vehicle1: Dict,
+    vehicle2: Dict,
+    image_width: int
+) -> bool:
+    """
+    Detect if two vehicles are connected (e.g., bus + trailer, truck + trailer).
+    
+    Criteria:
+    1. Horizontally aligned (similar y-coordinates)
+    2. Close proximity (small horizontal gap)
+    3. Not overlapping (would indicate same vehicle detected twice)
+    
+    Args:
+        vehicle1: First vehicle detection (left/front vehicle)
+        vehicle2: Second vehicle detection (right/rear vehicle)
+        image_width: Total image width for normalization
+    
+    Returns:
+        True if vehicles appear to be connected
+    """
+    bbox1 = vehicle1["bbox"]
+    bbox2 = vehicle2["bbox"]
+    
+    # Check if vehicle2 is to the right of vehicle1
+    if bbox2["x1"] <= bbox1["x1"]:
+        return False
+    
+    # Calculate horizontal gap between vehicles
+    horizontal_gap = bbox2["x1"] - bbox1["x2"]
+    
+    # Check for overlap (same vehicle detected twice)
+    if horizontal_gap < 0:
+        overlap_ratio = abs(horizontal_gap) / min(bbox1["width"], bbox2["width"])
+        if overlap_ratio > 0.5:  # Significant overlap = same vehicle
+            return False
+    
+    # Normalize gap relative to image width (angle-invariant)
+    relative_gap = horizontal_gap / image_width
+    
+    # Connected vehicles have small gap (< 5% of image width)
+    # Separate vehicles in traffic have larger gaps
+    if relative_gap > 0.05:
+        return False  # Too far apart
+    
+    # Check vertical alignment (y-centers should be similar)
+    y_center1 = (bbox1["y1"] + bbox1["y2"]) / 2
+    y_center2 = (bbox2["y1"] + bbox2["y2"]) / 2
+    y_diff = abs(y_center1 - y_center2)
+    
+    # Allow some vertical misalignment (road slope, camera angle)
+    max_y_diff = max(bbox1["height"], bbox2["height"]) * 0.3
+    if y_diff > max_y_diff:
+        return False  # Not aligned
+    
+    # Check bottom alignment (wheels should be on same ground plane)
+    bottom_diff = abs(bbox1["y2"] - bbox2["y2"])
+    max_bottom_diff = max(bbox1["height"], bbox2["height"]) * 0.2
+    if bottom_diff > max_bottom_diff:
+        return False  # Not on same ground level
+    
+    # Passed all checks - likely connected!
+    return True
+
+
+def merge_connected_vehicles(
+    vehicles: List[Dict],
+    image_width: int,
+    image_height: int,
+    full_image: np.ndarray
+) -> List[Dict]:
+    """
+    Merge vehicles that are connected (e.g., bus + trailer).
+    
+    Args:
+        vehicles: List of vehicle detections
+        image_width: Image width
+        image_height: Image height
+        full_image: Full image for cropping merged vehicles
+    
+    Returns:
+        List of merged vehicle detections
+    """
+    if len(vehicles) < 2:
+        return vehicles
+    
+    # Sort vehicles left to right
+    sorted_vehicles = sorted(vehicles, key=lambda v: v["bbox"]["x1"])
+    
+    merged = []
+    skip_indices = set()
+    
+    for i, vehicle1 in enumerate(sorted_vehicles):
+        if i in skip_indices:
+            continue
+        
+        # Check if this vehicle connects to the next one
+        connected_group = [vehicle1]
+        
+        for j in range(i + 1, len(sorted_vehicles)):
+            if j in skip_indices:
+                continue
+            
+            vehicle2 = sorted_vehicles[j]
+            
+            # Check if vehicle2 connects to the last vehicle in the group
+            if detect_trailer_connection(connected_group[-1], vehicle2, image_width):
+                connected_group.append(vehicle2)
+                skip_indices.add(j)
+            else:
+                break  # No more connections in this direction
+        
+        # Merge the connected group
+        if len(connected_group) > 1:
+            # This is a vehicle + trailer(s)
+            merged_vehicle = merge_vehicle_group(connected_group, image_width, image_height, full_image)
+            merged.append(merged_vehicle)
+        else:
+            # Single vehicle, no trailer
+            merged.append(vehicle1)
+    
+    return merged
+
+
+def merge_vehicle_group(
+    vehicles: List[Dict],
+    image_width: int,
+    image_height: int,
+    full_image: np.ndarray
+) -> Dict:
+    """
+    Merge a group of connected vehicles into one detection.
+    
+    Args:
+        vehicles: List of connected vehicle detections
+        image_width: Image width
+        image_height: Image height
+        full_image: Full image for cropping
+    
+    Returns:
+        Merged vehicle detection with combined axles
+    """
+    # Combine bounding boxes
+    x1 = min(v["bbox"]["x1"] for v in vehicles)
+    y1 = min(v["bbox"]["y1"] for v in vehicles)
+    x2 = max(v["bbox"]["x2"] for v in vehicles)
+    y2 = max(v["bbox"]["y2"] for v in vehicles)
+    
+    bbox_width = x2 - x1
+    bbox_height = y2 - y1
+    
+    # Sum axle counts
+    total_axles = sum(v["axle_count"] for v in vehicles)
+    
+    # Use primary vehicle's type (usually the first/largest)
+    primary_vehicle = max(vehicles, key=lambda v: v["bbox"]["width"] * v["bbox"]["height"])
+    vehicle_type = primary_vehicle["vehicle_type"]
+    
+    # Average confidence
+    avg_confidence = sum(v["confidence"] for v in vehicles) / len(vehicles)
+    
+    # Create merged crop
+    vehicle_crop = full_image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
+    
+    # Reclassify with combined axles
+    predicted_class = toll_class(
+        vehicle_type,
+        total_axles,
+        has_trailer=True,  # Mark as having trailer
+        bbox_height=bbox_height,
+        bbox_width=bbox_width,
+        image_height=image_height,
+        vehicle_crop=vehicle_crop
+    )
+    
+    return {
+        "vehicle_type": f"{vehicle_type}+trailer",  # Indicate it's a combination
+        "confidence": avg_confidence,
+        "bbox": {
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "width": bbox_width,
+            "height": bbox_height
+        },
+        "axle_count": total_axles,
+        "predicted_class": predicted_class,
+        "has_trailer": True,
+        "component_count": len(vehicles)  # How many vehicles were merged
+    }
+
+
 class VehicleDetector:
     """Wrapper for YOLO11n vehicle detection model."""
     
@@ -125,6 +318,9 @@ class VehicleDetector:
             bbox_width = x2 - x1
             bbox_height = y2 - y1
             
+            # Crop vehicle from image for visual feature analysis
+            vehicle_crop = image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
+            
             # Estimate axles from bounding box heuristics
             estimated_axles = estimate_axles_from_detection(
                 class_name,
@@ -133,14 +329,15 @@ class VehicleDetector:
                 image_height
             )
             
-            # Determine toll class with size-based classification for 2-axle vehicles
+            # Determine toll class with visual feature classification for 2-axle vehicles
             predicted_class = toll_class(
                 class_name, 
                 estimated_axles, 
                 False,
                 bbox_height=bbox_height,
                 bbox_width=bbox_width,
-                image_height=image_height
+                image_height=image_height,
+                vehicle_crop=vehicle_crop
             )
             
             detection = {
@@ -191,8 +388,17 @@ class VehicleDetector:
         if not detections:
             return None, image
         
-        # Sort by confidence and take the best
-        best_detection = max(detections, key=lambda d: d["confidence"])
+        # Check for trailer connections and merge connected vehicles
+        image_height, image_width = image_bgr.shape[:2]
+        merged_detections = merge_connected_vehicles(
+            detections, 
+            image_width, 
+            image_height,
+            image_bgr
+        )
+        
+        # Sort by confidence and take the best (might be a merged vehicle now)
+        best_detection = max(merged_detections, key=lambda d: d["confidence"])
         
         # Annotate image
         annotated_image = self._annotate_image(image, best_detection)
