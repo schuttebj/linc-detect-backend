@@ -60,8 +60,11 @@ async def lifespan(app: FastAPI):
     global detector
     print("🚀 Starting up...")
     print(f"Loading YOLO model: {settings.yolo_model}")
+    
+    # Use just the model name without .pt - Ultralytics will handle download
+    model_name = settings.yolo_model.replace('.pt', '')
     detector = VehicleDetector(
-        model_path=settings.yolo_model,
+        model_path=model_name,
         confidence=settings.yolo_confidence
     )
     print("✅ Model loaded successfully!")

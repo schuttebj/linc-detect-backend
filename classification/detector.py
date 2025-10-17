@@ -20,22 +20,25 @@ class VehicleDetector:
         "car", "truck", "bus", "motorcycle", "train"
     }
     
-    def __init__(self, model_path: str = "yolo11n.pt", confidence: float = 0.25):
+    def __init__(self, model_path: str = "yolo11n", confidence: float = 0.25):
         """
         Initialize the vehicle detector.
         
         Args:
-            model_path: Path to YOLO model file
+            model_path: YOLO model name (e.g., "yolo11n") - will auto-download if not present
             confidence: Confidence threshold for detections
         """
         self.confidence = confidence
         self.model_path = model_path
         
-        # Load model directly (YOLO will auto-download if not present)
-        # Just pass the model name and YOLO handles everything
-        print(f"Loading YOLO model: {model_path}...")
-        self.model = YOLO(model_path)
-        print("Model loaded successfully!")
+        # YOLO auto-downloads models to cache directory
+        # Pass model name and Ultralytics handles the download automatically
+        print(f"Initializing YOLO11 model: {model_path}")
+        print("If this is the first run, the model will be downloaded (~6MB, 30-60 seconds)")
+        
+        # Ultralytics expects model name without path for auto-download
+        self.model = YOLO(f"{model_path}.pt")
+        print(f"✅ YOLO11 model '{model_path}' loaded and ready!")
     
     def detect_vehicles(
         self, 
