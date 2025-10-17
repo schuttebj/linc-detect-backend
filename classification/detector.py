@@ -25,19 +25,30 @@ class VehicleDetector:
         Initialize the vehicle detector.
         
         Args:
-            model_path: YOLO model name (e.g., "yolo11n") - will auto-download if not present
+            model_path: YOLO model name (e.g., "yolo11n")
             confidence: Confidence threshold for detections
         """
         self.confidence = confidence
         self.model_path = model_path
         
-        # YOLO auto-downloads models to cache directory
-        # Pass model name and Ultralytics handles the download automatically
         print(f"Initializing YOLO11 model: {model_path}")
-        print("If this is the first run, the model will be downloaded (~6MB, 30-60 seconds)")
         
-        # Ultralytics expects model name without path for auto-download
-        self.model = YOLO(f"{model_path}.pt")
+        # Try multiple locations for the model
+        # 1. Project models directory (where download_model.py copies it)
+        project_model = Path("models") / f"{model_path}.pt"
+        # 2. Cache directory
+        cache_model = Path.home() / '.cache' / 'ultralytics' / f"{model_path}.pt"
+        
+        if project_model.exists():
+            print(f"✅ Found model in project directory: {project_model}")
+            self.model = YOLO(str(project_model))
+        elif cache_model.exists():
+            print(f"✅ Found model in cache: {cache_model}")
+            self.model = YOLO(str(cache_model))
+        else:
+            print(f"Model not found locally, using model name (YOLO will auto-download)")
+            self.model = YOLO(f"{model_path}.pt")
+        
         print(f"✅ YOLO11 model '{model_path}' loaded and ready!")
     
     def detect_vehicles(
