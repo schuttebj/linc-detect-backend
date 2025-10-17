@@ -7,14 +7,28 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import numpy as np
 import torch
+import torch.nn as nn
 from ultralytics import YOLO
-from ultralytics.nn.tasks import DetectionModel
 from PIL import Image
 
 from .rules import toll_class, estimate_axles_from_detection
 
-# Allow Ultralytics classes for PyTorch 2.6+ weights_only loading
-torch.serialization.add_safe_globals([DetectionModel])
+# Allow required classes for PyTorch 2.6+ weights_only loading of YOLO models
+# We trust Ultralytics models from official GitHub releases
+try:
+    from ultralytics.nn.tasks import DetectionModel
+    torch.serialization.add_safe_globals([
+        DetectionModel,
+        nn.modules.container.Sequential,
+        nn.modules.conv.Conv2d,
+        nn.modules.batchnorm.BatchNorm2d,
+        nn.modules.activation.SiLU,
+        nn.modules.pooling.MaxPool2d,
+        nn.modules.upsampling.Upsample,
+    ])
+except Exception as e:
+    print(f"Warning: Could not add safe globals: {e}")
+    print("Model loading will proceed with default PyTorch settings")
 
 
 class VehicleDetector:
@@ -44,15 +58,28 @@ class VehicleDetector:
         # 2. Cache directory
         cache_model = Path.home() / '.cache' / 'ultralytics' / f"{model_path}.pt"
         
-        if project_model.exists():
-            print(f"✅ Found model in project directory: {project_model}")
-            self.model = YOLO(str(project_model))
-        elif cache_model.exists():
-            print(f"✅ Found model in cache: {cache_model}")
-            self.model = YOLO(str(cache_model))
-        else:
-            print(f"Model not found locally, using model name (YOLO will auto-download)")
-            self.model = YOLO(f"{model_path}.pt")
+        # Temporarily disable weights_only for trusted YOLO model loading
+        # PyTorch 2.6+ requires this for Ultralytics models
+        original_load = torch.load
+        def patched_load(*args, **kwargs):
+            kwargs['weights_only'] = False
+            return original_load(*args, **kwargs)
+        
+        torch.load = patched_load
+        
+        try:
+            if project_model.exists():
+                print(f"✅ Found model in project directory: {project_model}")
+                self.model = YOLO(str(project_model))
+            elif cache_model.exists():
+                print(f"✅ Found model in cache: {cache_model}")
+                self.model = YOLO(str(cache_model))
+            else:
+                print(f"Model not found locally, using model name (YOLO will auto-download)")
+                self.model = YOLO(f"{model_path}.pt")
+        finally:
+            # Restore original torch.load
+            torch.load = original_load
         
         print(f"✅ YOLO11 model '{model_path}' loaded and ready!")
     
