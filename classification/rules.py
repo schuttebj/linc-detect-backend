@@ -187,42 +187,46 @@ def toll_class(
     """
     vt = (vehicle_type or "").lower()
     
-    # PRIORITY 1: Motorcycles are ALWAYS Class 1 (check before axle logic)
+    # PRIORITY 1: Motorcycles are ALWAYS Class 1 (regardless of axle count)
     if vt == "motorcycle":
         return "Class 1"
     
-    # PRIORITY 2: Clear axle thresholds
+    # PRIORITY 2: Axle count thresholds (applies to ALL vehicles)
+    # This handles light vehicles WITH trailers correctly
     if axle_count >= 5:
         return "Class 4"
     
     if axle_count in (3, 4):
+        # Light vehicle + trailer: 2+1 or 2+2 = 3-4 axles → Class 3
+        # Heavy vehicle with 3-4 axles → Class 3
         return "Class 3"
     
     # PRIORITY 3: Two-axle cases - distinguish light (Class 1) from heavy (Class 2)
     if axle_count == 2:
-        # Known light vehicles: ALWAYS Class 1
+        # Known light vehicles WITHOUT trailers: Class 1
         if vt in ("car", "suv", "van", "pickup", "bakkie", "minibus"):
             return "Class 1"
         
-        # For "truck" or "bus" labels (YOLO might be wrong for SUVs/bakkies):
-        # Use aspect ratio as PRIMARY discriminator
-        if vt in ("truck", "bus"):
+        # BUSES: 2-axle heavy vehicles → Class 2
+        if vt == "bus":
+            return "Class 2"
+        
+        # TRUCKS: Check if real truck or mislabeled SUV/bakkie
+        if vt == "truck":
             if bbox_height and bbox_width and image_height:
-                # Calculate aspect ratio
                 aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
                 
-                # Decision threshold:
-                # - Real 2-axle trucks/buses: Long rigid body (aspect > 3.0)
-                # - SUVs/bakkies: More compact (aspect < 3.0)
+                # Real 2-axle trucks: Long rigid bodies (aspect > 3.0)
+                # SUVs/bakkies: More compact (aspect < 3.0)
                 if aspect_ratio > 3.0:
-                    return "Class 2"  # Heavy 2-axle vehicle
+                    return "Class 2"  # Real 2-axle truck
                 else:
                     return "Class 1"  # Likely SUV/bakkie mislabeled
             
-            # No size info: Conservative default to Class 1 (avoid overcharging)
-            return "Class 1"
+            # No size info: Trust YOLO label
+            return "Class 2"
         
-        # Unknown type with 2 axles: default to Class 1
+        # Unknown 2-axle vehicle: Default to Class 1
         return "Class 1"
     
     # PRIORITY 4: Unknown axle count - use type hints
