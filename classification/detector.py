@@ -31,17 +31,10 @@ class VehicleDetector:
         self.confidence = confidence
         self.model_path = model_path
         
-        # Create models directory if it doesn't exist
-        models_dir = Path("models")
-        models_dir.mkdir(exist_ok=True)
-        
-        # If model_path is just a filename, look in models directory
-        if not os.path.isabs(model_path) and not os.path.exists(model_path):
-            model_path = models_dir / model_path
-        
-        # Load model (will download if not present)
-        print(f"Loading YOLO model from {model_path}...")
-        self.model = YOLO(str(model_path))
+        # Load model directly (YOLO will auto-download if not present)
+        # Just pass the model name and YOLO handles everything
+        print(f"Loading YOLO model: {model_path}...")
+        self.model = YOLO(model_path)
         print("Model loaded successfully!")
     
     def detect_vehicles(
