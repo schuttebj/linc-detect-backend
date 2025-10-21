@@ -86,7 +86,7 @@ def train_classifier(
     print(f"Validation samples: {len(val_dataset)}")
     
     # Initialize model with pre-trained ImageNet weights
-    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
+    model = models.efficientnet_b0(pretrained=True)
     model.classifier[1] = nn.Linear(1280, num_classes)
     model = model.to(device)
     
