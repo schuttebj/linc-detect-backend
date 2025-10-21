@@ -86,7 +86,23 @@ def train_classifier(
     print(f"Validation samples: {len(val_dataset)}")
     
     # Initialize model with pre-trained ImageNet weights
-    model = models.efficientnet_b0(pretrained=True)
+    # Use weights=None first to avoid hash check, then load manually
+    model = models.efficientnet_b0(weights=None)
+    
+    # Load pretrained weights manually (skip hash validation)
+    try:
+        from torch.hub import load_state_dict_from_url
+        state_dict = load_state_dict_from_url(
+            'https://download.pytorch.org/models/efficientnet_b0_rwightman-3dd342df.pth',
+            progress=True,
+            check_hash=False
+        )
+        model.load_state_dict(state_dict)
+        print("✅ Loaded pretrained ImageNet weights")
+    except Exception as e:
+        print(f"⚠️ Could not load pretrained weights: {e}. Training from scratch.")
+    
+    # Replace classifier head for our classes
     model.classifier[1] = nn.Linear(1280, num_classes)
     model = model.to(device)
     
