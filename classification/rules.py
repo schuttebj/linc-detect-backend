@@ -171,11 +171,18 @@ def toll_class(
     vehicle_crop: Optional[np.ndarray] = None
 ) -> str:
     """
-    Determine toll class based on vehicle type, axle count, and visual features.
+    Enhanced toll classification with refined vehicle types from two-stage classification.
+    
+    Classification Rules:
+    - Class 1: Light vehicles (cars, SUVs, pickups, vans, motorcycles)
+    - Class 2: 2-axle heavy vehicles (delivery vans, box trucks, buses)
+    - Class 3: 3-4 axles (any combination)
+    - Class 4: 5+ axles (heavy articulated vehicles)
     
     Args:
-        vehicle_type: Detected vehicle type (e.g., "car", "truck", "bus")
-        axle_count: Number of axles detected
+        vehicle_type: Refined vehicle type from EfficientNet or YOLO fallback
+                     (car, suv, pickup, van, delivery_van, box_truck, semi, bus, motorcycle)
+        axle_count: Number of axles detected (from tripline or estimation)
         has_trailer: Whether a trailer was detected
         bbox_height: Bounding box height (for 2-axle classification)
         bbox_width: Bounding box width (for 2-axle classification)
@@ -191,8 +198,8 @@ def toll_class(
     if vt == "motorcycle":
         return "Class 1"
     
-    # PRIORITY 2: Axle count thresholds (applies to ALL vehicles)
-    # This handles light vehicles WITH trailers correctly
+    # PRIORITY 2: Axle count thresholds (overrides vehicle type)
+    # Tripline counting is the gold standard for production deployment
     if axle_count >= 5:
         return "Class 4"
     
@@ -201,41 +208,53 @@ def toll_class(
         # Heavy vehicle with 3-4 axles → Class 3
         return "Class 3"
     
-    # PRIORITY 3: Two-axle cases - distinguish light (Class 1) from heavy (Class 2)
+    # PRIORITY 3: Two-axle classification with refined vehicle types
+    # This is where the two-stage classifier shines!
     if axle_count == 2:
-        # Known light vehicles WITHOUT trailers: Class 1
-        if vt in ("car", "suv", "van", "pickup", "bakkie", "minibus"):
+        # Class 1: Light vehicles (consumer vehicles)
+        if vt in ("car", "suv", "pickup", "van"):
             return "Class 1"
         
-        # BUSES: 2-axle heavy vehicles → Class 2
-        if vt == "bus":
+        # Class 2: Heavy 2-axle vehicles (commercial/public transport)
+        if vt in ("delivery_van", "box_truck", "bus"):
             return "Class 2"
         
-        # TRUCKS: Check if real truck or mislabeled SUV/bakkie
+        # Semi with 2 axles (rare, bobtail tractor)
+        if vt == "semi":
+            return "Class 2"
+        
+        # Legacy fallback for old YOLO types
+        if vt in ("bakkie", "minibus"):
+            return "Class 1"
+        
+        # Generic "truck" - use aspect ratio heuristic
         if vt == "truck":
-            if bbox_height and bbox_width and image_height:
+            if bbox_height and bbox_width:
                 aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
-                
-                # Real 2-axle trucks: Long rigid bodies (aspect > 3.0)
-                # SUVs/bakkies: More compact (aspect < 3.0)
-                if aspect_ratio > 3.0:
-                    return "Class 2"  # Real 2-axle truck
-                else:
-                    return "Class 1"  # Likely SUV/bakkie mislabeled
-            
-            # No size info: Trust YOLO label
-            return "Class 2"
+                # Long rigid body = commercial truck (Class 2)
+                # Compact = likely pickup/SUV (Class 1)
+                return "Class 2" if aspect_ratio > 3.0 else "Class 1"
+            return "Class 2"  # Default to Class 2 for generic trucks
         
-        # Unknown 2-axle vehicle: Default to Class 1
+        # Unknown 2-axle vehicle: Conservative default
         return "Class 1"
     
-    # PRIORITY 4: Unknown axle count - use type hints
+    # PRIORITY 4: Unknown axle count - use refined type hints
+    # Light vehicle types → Class 1
+    if vt in ("car", "suv", "pickup", "van", "motorcycle"):
+        return "Class 1"
+    
+    # Heavy vehicle types → Class 2 (conservative)
+    if vt in ("delivery_van", "box_truck", "bus", "semi"):
+        return "Class 2"
+    
+    # Legacy light types
     if vt in LIGHT_TYPES:
         return "Class 1"
     
-    # Fallback: if we only know "truck/bus" but axle_count failed, be conservative
+    # Legacy heavy types
     if vt in HEAVY_TYPES:
-        return "Class 2"  # Safe default
+        return "Class 2"
     
     # Conservative default
     return "Class 1"

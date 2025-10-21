@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 import cv2
 import numpy as np
 from PIL import Image
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from classification import VehicleDetector
 from database import get_database, Database
@@ -51,6 +53,9 @@ UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
 
 # Global detector instance
 detector: Optional[VehicleDetector] = None
+
+# Thread pool for async stream processing
+stream_executor = ThreadPoolExecutor(max_workers=4)
 
 
 @asynccontextmanager
@@ -466,6 +471,107 @@ async def get_statistics():
     db = await get_database()
     stats = await db.get_statistics()
     return stats
+
+
+# ============================================================================
+# Live Stream Processing Endpoints
+# ============================================================================
+
+@app.post("/api/classify/stream")
+async def classify_stream(
+    stream_url: str,
+    duration: int = 30,
+    use_tripline: bool = True
+):
+    """
+    Classify vehicles from live stream (RTSP/RTMP/HTTP/USB camera).
+    
+    Args:
+        stream_url: Stream URL (e.g., rtsp://192.168.1.100/stream) or device index (e.g., "0")
+        duration: Processing duration in seconds
+        use_tripline: Use tripline counting for accurate axle count (recommended for production)
+    
+    Returns:
+        Classification results from stream
+    """
+    if not detector:
+        raise HTTPException(status_code=500, detail="Model not loaded")
+    
+    def process_stream_sync():
+        """Process stream in separate thread to avoid blocking."""
+        from classification.stream_processor import StreamProcessor
+        from classification.axle_counter import AxleCounter
+        
+        # Initialize stream processor
+        axle_counter = AxleCounter(fps=25) if use_tripline else None
+        processor = StreamProcessor(detector, axle_counter)
+        
+        try:
+            if not processor.open_stream(stream_url):
+                raise ValueError(f"Could not open stream: {stream_url}")
+            
+            # Process stream
+            results = processor.process_stream(duration=duration)
+            
+            return results
+        finally:
+            processor.close()
+    
+    # Run in thread pool to avoid blocking event loop
+    try:
+        results = await asyncio.get_event_loop().run_in_executor(
+            stream_executor,
+            process_stream_sync
+        )
+        
+        return {
+            "stream_url": stream_url,
+            "duration": duration,
+            "total_vehicles": len(results),
+            "use_tripline": use_tripline,
+            "classifications": results
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stream processing error: {str(e)}")
+
+
+@app.get("/api/stream/formats")
+async def get_supported_formats():
+    """Get list of supported stream formats and examples."""
+    return {
+        "formats": [
+            {
+                "protocol": "RTSP",
+                "example": "rtsp://192.168.1.100:554/stream",
+                "description": "IP cameras, NVRs (most common for CCTV)",
+                "notes": "Recommended for toll gate cameras"
+            },
+            {
+                "protocol": "RTMP",
+                "example": "rtmp://server.com/live/stream",
+                "description": "Streaming servers (OBS, etc.)",
+                "notes": "Good for remote testing"
+            },
+            {
+                "protocol": "HTTP/HLS",
+                "example": "http://server.com/stream.m3u8",
+                "description": "HTTP live streaming",
+                "notes": "Works with web cameras"
+            },
+            {
+                "protocol": "USB Camera",
+                "example": "0",
+                "description": "Local USB camera (device index)",
+                "notes": "For local testing only"
+            }
+        ],
+        "tripline_info": {
+            "recommended": True,
+            "description": "Tripline counting provides 98%+ axle accuracy for fixed cameras",
+            "note": "Essential for achieving 99.6% toll classification accuracy"
+        }
+    }
 
 
 # ============================================================================

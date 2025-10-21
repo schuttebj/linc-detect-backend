@@ -275,6 +275,13 @@ class VehicleDetector:
             torch.load = original_load
         
         print(f"✅ YOLO11 model '{model_path}' loaded and ready!")
+        
+        # NEW: Initialize EfficientNet classifier for refined vehicle types
+        from .vehicle_classifier import VehicleClassifier
+        classifier_path = Path("models/efficientnet_b0_vehicles.pth")
+        self.vehicle_classifier = VehicleClassifier(
+            model_path=str(classifier_path) if classifier_path.exists() else None
+        )
     
     def detect_vehicles(
         self, 
@@ -282,7 +289,9 @@ class VehicleDetector:
         imgsz: int = 640
     ) -> List[Dict]:
         """
-        Detect vehicles in an image.
+        Detect vehicles in an image using two-stage classification.
+        Stage 1: YOLO11n detects vehicle bounding boxes
+        Stage 2: EfficientNet-B0 classifies vehicle type (if trained model available)
         
         Args:
             image: Input image as numpy array (BGR format from OpenCV)
@@ -291,7 +300,7 @@ class VehicleDetector:
         Returns:
             List of detected vehicles with metadata
         """
-        # Run inference
+        # Run YOLO inference (Stage 1: Detection)
         results = self.model.predict(
             image, 
             imgsz=imgsz, 
@@ -304,10 +313,10 @@ class VehicleDetector:
         
         for box in results.boxes:
             class_id = int(box.cls.item())
-            class_name = results.names[class_id].lower()
+            yolo_class = results.names[class_id].lower()
             
             # Only process vehicle classes
-            if class_name not in self.VEHICLE_CLASSES:
+            if yolo_class not in self.VEHICLE_CLASSES:
                 continue
             
             # Extract box coordinates
@@ -318,20 +327,35 @@ class VehicleDetector:
             bbox_width = x2 - x1
             bbox_height = y2 - y1
             
-            # Crop vehicle from image for visual feature analysis
+            # Crop vehicle from image for classification
             vehicle_crop = image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
+            
+            # Stage 2: EfficientNet classification for refined vehicle type
+            if vehicle_crop is not None and vehicle_crop.size > 0:
+                refined_type, classifier_conf = self.vehicle_classifier.classify(vehicle_crop)
+                
+                # Use refined type if confident, otherwise fallback to YOLO
+                if refined_type != "unknown" and classifier_conf > 0.5:
+                    vehicle_type = refined_type
+                    # Average confidences from both models
+                    confidence = (confidence + classifier_conf) / 2
+                else:
+                    # Fallback: map YOLO class to refined types
+                    vehicle_type = self._map_yolo_to_refined(yolo_class)
+            else:
+                vehicle_type = self._map_yolo_to_refined(yolo_class)
             
             # Estimate axles from bounding box heuristics
             estimated_axles = estimate_axles_from_detection(
-                class_name,
+                vehicle_type,
                 bbox_height,
                 bbox_width,
                 image_height
             )
             
-            # Determine toll class with visual feature classification for 2-axle vehicles
+            # Determine toll class with refined vehicle type
             predicted_class = toll_class(
-                class_name, 
+                vehicle_type, 
                 estimated_axles, 
                 False,
                 bbox_height=bbox_height,
@@ -341,7 +365,8 @@ class VehicleDetector:
             )
             
             detection = {
-                "vehicle_type": class_name,
+                "vehicle_type": vehicle_type,
+                "yolo_class": yolo_class,  # Keep original for debugging
                 "confidence": confidence,
                 "bbox": {
                     "x1": x1,
@@ -358,6 +383,20 @@ class VehicleDetector:
             detections.append(detection)
         
         return detections
+    
+    def _map_yolo_to_refined(self, yolo_class: str) -> str:
+        """
+        Map YOLO's generic classes to refined types (fallback).
+        Used when EfficientNet classifier is not available or has low confidence.
+        """
+        mapping = {
+            'car': 'car',  # Could be car/suv/pickup, but default to car
+            'truck': 'box_truck',  # Could be delivery_van/box_truck/semi
+            'bus': 'bus',
+            'motorcycle': 'motorcycle',
+            'train': 'semi'  # Trains are rare, likely misclassified semis
+        }
+        return mapping.get(yolo_class, 'car')
     
     def detect_and_classify(
         self, 

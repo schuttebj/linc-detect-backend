@@ -11,3 +11,10 @@ python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
+# PyTorch for EfficientNet-B0 vehicle classifier
+torch==2.1.0
+torchvision==0.16.0
+
+# Training utilities
+tqdm==4.66.1
+
