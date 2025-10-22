@@ -286,7 +286,8 @@ class VehicleDetector:
     def detect_vehicles(
         self, 
         image: np.ndarray,
-        imgsz: int = 640
+        imgsz: int = 640,
+        confidence_threshold: float = 0.5
     ) -> List[Dict]:
         """
         Detect vehicles in an image using two-stage classification.
@@ -311,7 +312,19 @@ class VehicleDetector:
         detections = []
         image_height, image_width = image.shape[:2]
         
+        # Sort boxes by area (largest first) to prioritize main vehicle over background
+        boxes_with_area = []
         for box in results.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            area = (x2 - x1) * (y2 - y1)
+            boxes_with_area.append((box, area))
+        
+        # Sort by area descending
+        boxes_with_area.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"\n📊 YOLO detected {len(boxes_with_area)} objects, processing largest first...")
+        
+        for box, area in boxes_with_area:
             class_id = int(box.cls.item())
             yolo_class = results.names[class_id].lower()
             
@@ -331,19 +344,48 @@ class VehicleDetector:
             vehicle_crop = image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
             
             # Stage 2: EfficientNet classification for refined vehicle type
+            debug_info = {
+                "yolo_detection": yolo_class,
+                "yolo_confidence": confidence,
+                "crop_size": None,
+                "efficientnet_prediction": None,
+                "efficientnet_confidence": None,
+                "efficientnet_top3": [],
+                "threshold": confidence_threshold,
+                "decision": None
+            }
+            
             if vehicle_crop is not None and vehicle_crop.size > 0:
-                refined_type, classifier_conf = self.vehicle_classifier.classify(vehicle_crop)
+                print(f"\n🚗 Processing vehicle: YOLO detected '{yolo_class}' (conf: {confidence:.3f})")
+                print(f"   Crop size: {vehicle_crop.shape}")
+                
+                debug_info["crop_size"] = vehicle_crop.shape
+                
+                refined_type, classifier_conf, top3 = self.vehicle_classifier.classify_with_top3(vehicle_crop)
+                
+                debug_info["efficientnet_prediction"] = refined_type
+                debug_info["efficientnet_confidence"] = classifier_conf
+                debug_info["efficientnet_top3"] = top3
+                
+                print(f"   EfficientNet result: '{refined_type}' (conf: {classifier_conf:.3f})")
+                print(f"   Threshold: {confidence_threshold}")
                 
                 # Use refined type if confident, otherwise fallback to YOLO
-                if refined_type != "unknown" and classifier_conf > 0.5:
+                if refined_type != "unknown" and classifier_conf > confidence_threshold:
+                    print(f"   ✅ Using EfficientNet: {refined_type}")
                     vehicle_type = refined_type
                     # Average confidences from both models
                     confidence = (confidence + classifier_conf) / 2
+                    debug_info["decision"] = f"EfficientNet ({classifier_conf:.3f} > {confidence_threshold})"
                 else:
+                    print(f"   ⚠️  Falling back to YOLO mapping")
                     # Fallback: map YOLO class to refined types
                     vehicle_type = self._map_yolo_to_refined(yolo_class)
+                    debug_info["decision"] = f"YOLO fallback ({classifier_conf:.3f} <= {confidence_threshold})"
             else:
+                print(f"⚠️  No valid crop for YOLO detection '{yolo_class}'")
                 vehicle_type = self._map_yolo_to_refined(yolo_class)
+                debug_info["decision"] = "No valid crop - YOLO fallback"
             
             # Estimate axles from bounding box heuristics
             estimated_axles = estimate_axles_from_detection(
@@ -377,7 +419,8 @@ class VehicleDetector:
                     "height": bbox_height
                 },
                 "axle_count": estimated_axles,
-                "predicted_class": predicted_class
+                "predicted_class": predicted_class,
+                "debug": debug_info  # Add debug information
             }
             
             detections.append(detection)
@@ -400,7 +443,8 @@ class VehicleDetector:
     
     def detect_and_classify(
         self, 
-        image_path: str
+        image_path: str,
+        confidence_threshold: float = 0.5
     ) -> Tuple[Optional[Dict], np.ndarray]:
         """
         Detect and classify a vehicle from an image file.
@@ -421,7 +465,7 @@ class VehicleDetector:
             image_bgr = image
         
         # Detect vehicles
-        detections = self.detect_vehicles(image_bgr)
+        detections = self.detect_vehicles(image_bgr, confidence_threshold=confidence_threshold)
         
         # Get the most confident detection
         if not detections:

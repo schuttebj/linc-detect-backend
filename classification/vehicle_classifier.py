@@ -78,6 +78,7 @@ class VehicleClassifier:
             (vehicle_type, confidence)
         """
         if self.model is None:
+            print("⚠️  EfficientNet model not loaded, returning unknown")
             return "unknown", 0.0
         
         try:
@@ -93,13 +94,81 @@ class VehicleClassifier:
             with torch.no_grad():
                 outputs = self.model(img_tensor)
                 probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+                
+                # Get top 3 predictions for debugging
+                top3_conf, top3_pred = torch.topk(probabilities, min(3, len(self.VEHICLE_CLASSES)))
+                
                 confidence, predicted = torch.max(probabilities, 0)
+                vehicle_type = self.VEHICLE_CLASSES[predicted.item()]
+                
+                # Debug logging
+                print(f"🔍 EfficientNet Classification:")
+                print(f"   Top prediction: {vehicle_type} ({confidence.item():.3f})")
+                for i in range(len(top3_pred)):
+                    print(f"   #{i+1}: {self.VEHICLE_CLASSES[top3_pred[i].item()]} ({top3_conf[i].item():.3f})")
             
-            vehicle_type = self.VEHICLE_CLASSES[predicted.item()]
             return vehicle_type, confidence.item()
         except Exception as e:
             print(f"⚠️  Classification error: {e}")
+            import traceback
+            traceback.print_exc()
             return "unknown", 0.0
+    
+    def classify_with_top3(self, vehicle_crop: np.ndarray) -> Tuple[str, float, list]:
+        """
+        Classify vehicle type and return top 3 predictions for debugging.
+        
+        Args:
+            vehicle_crop: BGR image crop from YOLO detection
+        
+        Returns:
+            (vehicle_type, confidence, top3_predictions)
+            where top3_predictions is a list of dicts: [{"class": "pickup", "confidence": 0.85}, ...]
+        """
+        if self.model is None:
+            print("⚠️  EfficientNet model not loaded, returning unknown")
+            return "unknown", 0.0, []
+        
+        try:
+            # Convert BGR to RGB
+            if len(vehicle_crop.shape) == 3:
+                vehicle_crop = vehicle_crop[:, :, ::-1]
+            
+            # Convert to PIL and transform
+            pil_image = Image.fromarray(vehicle_crop)
+            img_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
+            
+            # Inference
+            with torch.no_grad():
+                outputs = self.model(img_tensor)
+                probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+                
+                # Get top 3 predictions
+                top3_conf, top3_pred = torch.topk(probabilities, min(3, len(self.VEHICLE_CLASSES)))
+                
+                confidence, predicted = torch.max(probabilities, 0)
+                vehicle_type = self.VEHICLE_CLASSES[predicted.item()]
+                
+                # Format top 3 for response
+                top3_list = []
+                for i in range(len(top3_pred)):
+                    top3_list.append({
+                        "class": self.VEHICLE_CLASSES[top3_pred[i].item()],
+                        "confidence": float(top3_conf[i].item())
+                    })
+                
+                # Debug logging
+                print(f"🔍 EfficientNet Classification:")
+                print(f"   Top prediction: {vehicle_type} ({confidence.item():.3f})")
+                for i, pred in enumerate(top3_list):
+                    print(f"   #{i+1}: {pred['class']} ({pred['confidence']:.3f})")
+            
+            return vehicle_type, confidence.item(), top3_list
+        except Exception as e:
+            print(f"⚠️  Classification error: {e}")
+            import traceback
+            traceback.print_exc()
+            return "unknown", 0.0, []
     
     def classify_batch(self, crops: list) -> list:
         """Batch classification for efficiency."""
