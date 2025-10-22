@@ -174,14 +174,14 @@ def toll_class(
     Enhanced toll classification with refined vehicle types from two-stage classification.
     
     Classification Rules:
-    - Class 1: Light vehicles (cars, SUVs, pickups, vans, motorcycles)
+    - Class 1: Light vehicles (cars, pickups, motorcycles)
     - Class 2: 2-axle heavy vehicles (delivery vans, box trucks, buses)
     - Class 3: 3-4 axles (any combination)
     - Class 4: 5+ axles (heavy articulated vehicles)
     
     Args:
-        vehicle_type: Refined vehicle type from EfficientNet or YOLO fallback
-                     (car, suv, pickup, van, delivery_van, box_truck, semi, bus, motorcycle)
+        vehicle_type: Refined vehicle type from EfficientNet (7 classes):
+                     car, pickup, delivery_van, box_truck, semi, bus, motorcycle
         axle_count: Number of axles detected (from tripline or estimation)
         has_trailer: Whether a trailer was detected
         bbox_height: Bounding box height (for 2-axle classification)
@@ -212,7 +212,8 @@ def toll_class(
     # This is where the two-stage classifier shines!
     if axle_count == 2:
         # Class 1: Light vehicles (consumer vehicles)
-        if vt in ("car", "suv", "pickup", "van"):
+        # Note: We don't have 'suv' or 'van' in our 7-class model
+        if vt in ("car", "pickup"):
             return "Class 1"
         
         # Class 2: Heavy 2-axle vehicles (commercial/public transport)
@@ -241,7 +242,8 @@ def toll_class(
     
     # PRIORITY 4: Unknown axle count - use refined type hints
     # Light vehicle types → Class 1
-    if vt in ("car", "suv", "pickup", "van", "motorcycle"):
+    # Note: We don't have 'suv' or 'van' in our 7-class model
+    if vt in ("car", "pickup", "motorcycle"):
         return "Class 1"
     
     # Heavy vehicle types → Class 2 (conservative)
