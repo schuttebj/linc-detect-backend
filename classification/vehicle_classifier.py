@@ -15,16 +15,15 @@ class VehicleClassifier:
     """EfficientNet-B0 for refined vehicle classification."""
     
     # Refined vehicle types for toll classification
+    # Order must match PyTorch ImageFolder alphabetical loading
     VEHICLE_CLASSES = [
-        'car',           # Sedans, hatchbacks, coupes
-        'suv',           # Consumer SUVs, crossovers
-        'pickup',        # Consumer pickup trucks (F-150, Hilux, etc)
-        'van',           # Passenger vans, minibuses
-        'delivery_van',  # Commercial delivery vans (2 axles)
         'box_truck',     # Single-unit box trucks
-        'semi',          # Semi-trucks, articulated vehicles
         'bus',           # Buses
-        'motorcycle'     # Motorcycles
+        'car',           # Sedans, hatchbacks, coupes
+        'delivery_van',  # Commercial delivery vans (2 axles)
+        'motorcycle',    # Motorcycles
+        'pickup',        # Consumer pickup trucks (F-150, Hilux, etc)
+        'semi',          # Semi-trucks, articulated vehicles
     ]
     
     def __init__(self, model_path: Optional[str] = None, device: str = 'auto'):
