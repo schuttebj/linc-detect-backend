@@ -43,6 +43,15 @@ def main(args):
     print(f"\n📥 Loading base model: {args.model}")
     model = YOLO(f"{args.model}.pt")
     
+    # Parse cache argument
+    cache_value = args.cache
+    if cache_value.lower() in ['false', 'no', '0']:
+        cache_value = False
+    elif cache_value.lower() in ['true', 'yes', '1', 'ram']:
+        cache_value = 'ram'
+    elif cache_value.lower() == 'disk':
+        cache_value = 'disk'
+    
     # Training configuration
     print(f"\n📋 Training Configuration:")
     print(f"   Dataset: LVIS (auto-download if needed)")
@@ -51,6 +60,7 @@ def main(args):
     print(f"   Image Size: {args.imgsz}")
     print(f"   Device: {args.device}")
     print(f"   Workers: {args.workers}")
+    print(f"   Cache: {cache_value}")
     print(f"   Output: {args.project}/{args.name}")
     
     if args.epochs < 50:
@@ -83,7 +93,7 @@ def main(args):
         # Optimization
         patience=args.patience,     # Early stopping
         save=True,                  # Save checkpoints
-        cache=args.cache,           # Cache images in RAM
+        cache=cache_value,          # Cache setting (False, 'disk', or 'ram')
         
         # Advanced
         pretrained=True,
@@ -153,7 +163,7 @@ if __name__ == "__main__":
     parser.add_argument("--name", default="yolo12n_vehicles", help="Experiment name")
     
     # Options
-    parser.add_argument("--cache", type=bool, default=True, help="Cache images in RAM")
+    parser.add_argument("--cache", type=str, default="False", help="Cache images: 'ram', 'disk', or 'False'")
     
     args = parser.parse_args()
     
