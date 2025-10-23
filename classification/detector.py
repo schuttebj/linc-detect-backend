@@ -225,25 +225,39 @@ def merge_vehicle_group(
 
 
 class VehicleDetector:
-    """Wrapper for YOLO11n vehicle detection model."""
+    """Wrapper for YOLO vehicle detection model (supports COCO and LVIS datasets)."""
     
-    # Vehicle classes we care about from COCO dataset
-    VEHICLE_CLASSES = {
+    # COCO vehicle classes (80 total classes, only these are vehicles)
+    COCO_VEHICLE_CLASSES = {
         "car", "truck", "bus", "motorcycle", "train"
     }
     
-    def __init__(self, model_path: str = "yolo11n", confidence: float = 0.25):
+    # LVIS vehicle class IDs and names (1203 total classes)
+    LVIS_VEHICLE_CLASSES = {
+        206: 'car',
+        799: 'pickup',           # ⭐ This is why we use LVIS!
+        1113: 'semi',            # ⭐ Semi truck (articulated)
+        172: 'bus',
+        702: 'motorcycle',
+        691: 'delivery_van',     # Minivan in LVIS
+        1122: 'box_truck',       # Generic truck in LVIS
+        177: 'car',              # Taxi (treat as car)
+        336: 'car',              # Police car (treat as car)
+        921: 'bus',              # School bus
+    }
+    
+    def __init__(self, model_path: str = "yolo12n", confidence: float = 0.25):
         """
         Initialize the vehicle detector.
         
         Args:
-            model_path: YOLO model name (e.g., "yolo11n")
+            model_path: YOLO model name (e.g., "yolo12n" for COCO, "yolo12n_lvis" for LVIS-trained)
             confidence: Confidence threshold for detections
         """
         self.confidence = confidence
         self.model_path = model_path
         
-        print(f"Initializing YOLO11 model: {model_path}")
+        print(f"Initializing YOLO model: {model_path}")
         
         # Try multiple locations for the model
         # 1. Project models directory (where download_model.py copies it)
@@ -274,14 +288,27 @@ class VehicleDetector:
             # Restore original torch.load
             torch.load = original_load
         
-        print(f"✅ YOLO11 model '{model_path}' loaded and ready!")
+        print(f"✅ YOLO model '{model_path}' loaded and ready!")
         
-        # NEW: Initialize EfficientNet classifier for refined vehicle types
-        from .vehicle_classifier import VehicleClassifier
-        classifier_path = Path("models/efficientnet_b0_vehicles.pth")
-        self.vehicle_classifier = VehicleClassifier(
-            model_path=str(classifier_path) if classifier_path.exists() else None
-        )
+        # Detect if this is LVIS-trained model (has 1203 classes) or COCO (80 classes)
+        self.is_lvis_model = self._detect_model_type()
+    
+    def _detect_model_type(self) -> bool:
+        """Detect if model is LVIS-trained or COCO-trained."""
+        try:
+            # Check class names in model
+            class_names = self.model.names
+            
+            # LVIS has 1203 classes, COCO has 80
+            if len(class_names) > 1000:
+                print(f"✅ Detected LVIS model ({len(class_names)} classes)")
+                return True
+            else:
+                print(f"✅ Detected COCO model ({len(class_names)} classes)")
+                return False
+        except:
+            print("⚠️  Could not detect model type, assuming COCO")
+            return False
     
     def detect_vehicles(
         self, 
@@ -290,13 +317,14 @@ class VehicleDetector:
         confidence_threshold: float = 0.5
     ) -> List[Dict]:
         """
-        Detect vehicles in an image using two-stage classification.
-        Stage 1: YOLO11n detects vehicle bounding boxes
-        Stage 2: EfficientNet-B0 classifies vehicle type (if trained model available)
+        Detect vehicles in an image using YOLO.
+        
+        Supports both COCO-trained (generic car/truck/bus) and LVIS-trained (pickup/semi/etc) models.
         
         Args:
             image: Input image as numpy array (BGR format from OpenCV)
             imgsz: Input image size for model
+            confidence_threshold: Unused (kept for API compatibility)
         
         Returns:
             List of detected vehicles with metadata
@@ -326,11 +354,29 @@ class VehicleDetector:
         
         for box, area in boxes_with_area:
             class_id = int(box.cls.item())
-            yolo_class = results.names[class_id].lower()
             
-            # Only process vehicle classes
-            if yolo_class not in self.VEHICLE_CLASSES:
-                continue
+            # Process based on model type (COCO or LVIS)
+            if self.is_lvis_model:
+                # LVIS model: Check if class_id is in our vehicle mapping
+                if class_id not in self.LVIS_VEHICLE_CLASSES:
+                    continue
+                
+                # Get refined vehicle type directly from LVIS
+                vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
+                yolo_class = vehicle_type  # For debug info
+                
+                print(f"\n🚗 LVIS Detection: class_id={class_id} → {vehicle_type}")
+                
+            else:
+                # COCO model: Use generic classes and map them
+                yolo_class = results.names[class_id].lower()
+                
+                # Only process vehicle classes
+                if yolo_class not in self.COCO_VEHICLE_CLASSES:
+                    continue
+                
+                print(f"\n🚗 COCO Detection: {yolo_class}")
+                vehicle_type = None  # Will be mapped later
             
             # Extract box coordinates
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -340,52 +386,25 @@ class VehicleDetector:
             bbox_width = x2 - x1
             bbox_height = y2 - y1
             
-            # Crop vehicle from image for classification
+            # Crop vehicle from image for reference
             vehicle_crop = image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
             
-            # Stage 2: EfficientNet classification for refined vehicle type
+            # Debug info
             debug_info = {
-                "yolo_detection": yolo_class,
+                "model_type": "LVIS" if self.is_lvis_model else "COCO",
+                "class_id": class_id,
+                "yolo_class": yolo_class,
                 "yolo_confidence": confidence,
-                "crop_size": None,
-                "efficientnet_prediction": None,
-                "efficientnet_confidence": None,
-                "efficientnet_top3": [],
-                "threshold": confidence_threshold,
-                "decision": None
+                "crop_size": vehicle_crop.shape if vehicle_crop is not None else None,
             }
             
-            if vehicle_crop is not None and vehicle_crop.size > 0:
-                print(f"\n🚗 Processing vehicle: YOLO detected '{yolo_class}' (conf: {confidence:.3f})")
-                print(f"   Crop size: {vehicle_crop.shape}")
-                
-                debug_info["crop_size"] = vehicle_crop.shape
-                
-                refined_type, classifier_conf, top3 = self.vehicle_classifier.classify_with_top3(vehicle_crop)
-                
-                debug_info["efficientnet_prediction"] = refined_type
-                debug_info["efficientnet_confidence"] = classifier_conf
-                debug_info["efficientnet_top3"] = top3
-                
-                print(f"   EfficientNet result: '{refined_type}' (conf: {classifier_conf:.3f})")
-                print(f"   Threshold: {confidence_threshold}")
-                
-                # Use refined type if confident, otherwise fallback to YOLO
-                if refined_type != "unknown" and classifier_conf > confidence_threshold:
-                    print(f"   ✅ Using EfficientNet: {refined_type}")
-                    vehicle_type = refined_type
-                    # Average confidences from both models
-                    confidence = (confidence + classifier_conf) / 2
-                    debug_info["decision"] = f"EfficientNet ({classifier_conf:.3f} > {confidence_threshold})"
-                else:
-                    print(f"   ⚠️  Falling back to YOLO mapping")
-                    # Fallback: map YOLO class to refined types
-                    vehicle_type = self._map_yolo_to_refined(yolo_class)
-                    debug_info["decision"] = f"YOLO fallback ({classifier_conf:.3f} <= {confidence_threshold})"
-            else:
-                print(f"⚠️  No valid crop for YOLO detection '{yolo_class}'")
+            # Map COCO classes to refined types if needed
+            if not self.is_lvis_model:
                 vehicle_type = self._map_yolo_to_refined(yolo_class)
-                debug_info["decision"] = "No valid crop - YOLO fallback"
+                debug_info["mapped_type"] = vehicle_type
+                print(f"   Mapped to: {vehicle_type}")
+            else:
+                debug_info["lvis_direct"] = True
             
             # Estimate axles from bounding box heuristics
             estimated_axles = estimate_axles_from_detection(
@@ -429,22 +448,24 @@ class VehicleDetector:
     
     def _map_yolo_to_refined(self, yolo_class: str) -> str:
         """
-        Map YOLO's generic classes to refined types (fallback).
-        Used when EfficientNet classifier is not available or has low confidence.
+        Map COCO's generic classes to refined types.
+        
+        Note: This is a fallback for COCO models. LVIS models have native refined types.
+        For best results, use a LVIS-trained model which has native pickup/semi detection.
         """
         mapping = {
-            'car': 'car',  # Could be car/suv/pickup, but default to car
-            'truck': 'box_truck',  # Could be delivery_van/box_truck/semi
+            'car': 'car',           # COCO lumps car/suv/pickup together
+            'truck': 'box_truck',   # COCO lumps all trucks together
             'bus': 'bus',
             'motorcycle': 'motorcycle',
-            'train': 'semi'  # Trains are rare, likely misclassified semis
+            'train': 'semi'         # Rare misclassification
         }
         return mapping.get(yolo_class, 'car')
     
     def detect_and_classify(
         self, 
         image_path: str,
-        confidence_threshold: float = 0.5
+        confidence_threshold: float = 0.5  # Kept for API compatibility
     ) -> Tuple[Optional[Dict], np.ndarray]:
         """
         Detect and classify a vehicle from an image file.
@@ -465,7 +486,7 @@ class VehicleDetector:
             image_bgr = image
         
         # Detect vehicles
-        detections = self.detect_vehicles(image_bgr, confidence_threshold=confidence_threshold)
+        detections = self.detect_vehicles(image_bgr)
         
         # Get the most confident detection
         if not detections:

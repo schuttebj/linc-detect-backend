@@ -288,9 +288,7 @@ async def classify_image(file: UploadFile = File(...)):
     start_time = time.time()
     
     try:
-        # Use configured confidence threshold
-        threshold = model_config.get("confidence_threshold", 0.5)
-        result, annotated_image = detector.detect_and_classify(str(file_path), confidence_threshold=threshold)
+        result, annotated_image = detector.detect_and_classify(str(file_path))
         processing_time = time.time() - start_time
         
         if result is None:
@@ -610,31 +608,27 @@ manager = ConnectionManager()
 # Configuration & Debug Endpoints
 # ============================================================================
 
-# Global configuration (can be updated via API)
+# Global configuration
 model_config = {
-    "confidence_threshold": 0.5,  # EfficientNet confidence threshold
     "yolo_confidence": 0.25,      # YOLO detection confidence
 }
 
 @app.get("/api/config")
 async def get_config():
     """Get current model configuration."""
+    if not detector:
+        return {"error": "Model not loaded"}
+    
     return {
         "model_config": model_config,
-        "vehicle_classes": detector.vehicle_classifier.VEHICLE_CLASSES if detector else [],
-        "model_loaded": detector.vehicle_classifier.model is not None if detector else False
+        "model_type": "LVIS" if detector.is_lvis_model else "COCO",
+        "model_loaded": detector.model is not None,
+        "vehicle_classes": list(detector.LVIS_VEHICLE_CLASSES.values()) if detector.is_lvis_model else list(detector.COCO_VEHICLE_CLASSES)
     }
 
 @app.post("/api/config")
 async def update_config(config: dict):
     """Update model configuration dynamically."""
-    if "confidence_threshold" in config:
-        threshold = float(config["confidence_threshold"])
-        if 0.0 <= threshold <= 1.0:
-            model_config["confidence_threshold"] = threshold
-        else:
-            raise HTTPException(status_code=400, detail="Confidence threshold must be between 0.0 and 1.0")
-    
     if "yolo_confidence" in config:
         yolo_conf = float(config["yolo_confidence"])
         if 0.0 <= yolo_conf <= 1.0:
