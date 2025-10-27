@@ -21,6 +21,27 @@ from pathlib import Path
 def main(args):
     """Train YOLO12 on LVIS dataset."""
     
+    # Vehicle class IDs from LVIS dataset (road vehicles for toll gates)
+    VEHICLE_CLASSES = [
+        7,      # ambulance
+        93,     # bicycle
+        172,    # bus
+        177,    # taxi
+        206,    # car
+        336,    # police car
+        440,    # fire truck
+        482,    # garbage truck
+        691,    # minivan
+        700,    # motor scooter
+        702,    # motorcycle
+        799,    # pickup truck ⭐
+        921,    # school bus
+        1106,   # tow truck
+        1112,   # dirt bike
+        1113,   # semi truck ⭐
+        1122,   # truck
+    ]
+    
     print("="*60)
     print("LVIS YOLO12 Vehicle Classifier Training")
     print("="*60)
@@ -55,6 +76,10 @@ def main(args):
     # Training configuration
     print(f"\n📋 Training Configuration:")
     print(f"   Dataset: LVIS (auto-download if needed)")
+    if args.vehicles_only:
+        print(f"   Classes: {len(VEHICLE_CLASSES)} vehicle classes only 🚗")
+    else:
+        print(f"   Classes: All 1203 LVIS classes")
     print(f"   Epochs: {args.epochs}")
     print(f"   Batch Size: {args.batch}")
     print(f"   Image Size: {args.imgsz}")
@@ -73,49 +98,57 @@ def main(args):
     print("="*60 + "\n")
     
     # Train
-    results = model.train(
+    train_args = {
         # Dataset
-        data="lvis.yaml",           # LVIS dataset (auto-downloads)
+        "data": "lvis.yaml",           # LVIS dataset (auto-downloads)
         
         # Training params
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
+        "epochs": args.epochs,
+        "imgsz": args.imgsz,
+        "batch": args.batch,
         
         # Device
-        device=args.device,
-        workers=args.workers,
+        "device": args.device,
+        "workers": args.workers,
         
         # Output
-        project=args.project,
-        name=args.name,
+        "project": args.project,
+        "name": args.name,
         
         # Optimization
-        patience=args.patience,     # Early stopping
-        save=True,                  # Save checkpoints
-        cache=cache_value,          # Cache setting (False, 'disk', or 'ram')
+        "patience": args.patience,     # Early stopping
+        "save": True,                  # Save checkpoints
+        "cache": cache_value,          # Cache setting (False, 'disk', or 'ram')
         
         # Advanced
-        pretrained=True,
-        optimizer='AdamW',
-        lr0=0.01,                   # Initial learning rate
-        lrf=0.01,                   # Final learning rate
+        "pretrained": True,
+        "optimizer": 'AdamW',
+        "lr0": 0.01,                   # Initial learning rate
+        "lrf": 0.01,                   # Final learning rate
         
         # Augmentation
-        hsv_h=0.015,
-        hsv_s=0.7,
-        hsv_v=0.4,
-        degrees=0.0,                # No rotation (vehicles are upright)
-        translate=0.1,
-        scale=0.5,
-        flipud=0.0,                 # No vertical flip (vehicles don't flip)
-        fliplr=0.5,                 # Horizontal flip OK
-        mosaic=1.0,
+        "hsv_h": 0.015,
+        "hsv_s": 0.7,
+        "hsv_v": 0.4,
+        "degrees": 0.0,                # No rotation (vehicles are upright)
+        "translate": 0.1,
+        "scale": 0.5,
+        "flipud": 0.0,                 # No vertical flip (vehicles don't flip)
+        "fliplr": 0.5,                 # Horizontal flip OK
+        "mosaic": 1.0,
         
         # Validation
-        val=True,
-        plots=True,
-    )
+        "val": True,
+        "plots": True,
+    }
+    
+    # Add vehicle class filter if requested
+    if args.vehicles_only:
+        train_args["classes"] = VEHICLE_CLASSES
+        print(f"\n🚗 Training on {len(VEHICLE_CLASSES)} vehicle classes only")
+        print(f"   This will be faster and more accurate for toll gates!")
+    
+    results = model.train(**train_args)
     
     print("\n" + "="*60)
     print("✅ Training Complete!")
@@ -164,6 +197,7 @@ if __name__ == "__main__":
     
     # Options
     parser.add_argument("--cache", type=str, default="False", help="Cache images: 'ram', 'disk', or 'False'")
+    parser.add_argument("--vehicles-only", action="store_true", help="Train only on vehicle classes (17 classes instead of 1203)")
     
     args = parser.parse_args()
     
