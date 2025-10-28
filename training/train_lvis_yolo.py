@@ -86,6 +86,10 @@ def main(args):
     print(f"   Device: {args.device}")
     print(f"   Workers: {args.workers}")
     print(f"   Cache: {cache_value}")
+    if args.stable:
+        print(f"   Mode: Stable (LR=0.001, AMP=False) 🛡️")
+    else:
+        print(f"   Mode: Default (LR=0.01, AMP=True)")
     print(f"   Output: {args.project}/{args.name}")
     
     if args.epochs < 50:
@@ -123,8 +127,9 @@ def main(args):
         # Advanced
         "pretrained": True,
         "optimizer": 'AdamW',
-        "lr0": 0.01,                   # Initial learning rate
-        "lrf": 0.01,                   # Final learning rate
+        "lr0": 0.001 if args.stable else 0.01,    # Lower LR for stability
+        "lrf": 0.001 if args.stable else 0.01,    # Lower final LR
+        "amp": False if args.stable else True,    # Disable AMP for stability
         
         # Augmentation
         "hsv_h": 0.015,
@@ -198,6 +203,7 @@ if __name__ == "__main__":
     # Options
     parser.add_argument("--cache", type=str, default="False", help="Cache images: 'ram', 'disk', or 'False'")
     parser.add_argument("--vehicles-only", action="store_true", help="Train only on vehicle classes (17 classes instead of 1203)")
+    parser.add_argument("--stable", action="store_true", help="Use stable settings (lower LR, no AMP) to prevent NaN/Inf issues")
     
     args = parser.parse_args()
     
