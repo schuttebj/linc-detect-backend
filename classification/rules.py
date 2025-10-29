@@ -263,42 +263,69 @@ def estimate_axles_from_detection(
     image_height: int
 ) -> int:
     """
-    Estimate axle count from vehicle detection bounding box.
-    This is a CONSERVATIVE heuristic for uploaded images (not tripline counting).
+    Estimate axle count from vehicle detection and type.
     
-    IMPORTANT: For uploaded images, we default to 2 axles and let the 
-    visual feature classifier (classify_2axle_vehicle) determine Class 1 vs Class 2.
-    Only estimate 3+ axles if there's VERY strong evidence (extremely long articulated vehicles).
+    IMPORTANT: This is a HEURISTIC for uploaded images.
+    For PRODUCTION with fixed cameras, use tripline pulse counting (axle_counter.py).
     
     Args:
-        vehicle_type: Detected vehicle type
+        vehicle_type: Detected vehicle type from LVIS
         bbox_height: Height of bounding box in pixels
         bbox_width: Width of bounding box in pixels
         image_height: Total image height in pixels
     
     Returns:
-        Estimated axle count (conservative, defaults to 2)
+        Estimated axle count based on vehicle type and aspect ratio
     """
     vt = vehicle_type.lower()
     
-    # Calculate aspect ratio
+    # Calculate aspect ratio (length/height indicator)
     aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
     
-    # For uploaded images (MVP testing), we CANNOT reliably estimate axles from bounding boxes
-    # ALL vehicles default to 2 axles, and we rely on toll_class to distinguish Class 1 vs Class 2
-    # 
-    # For PRODUCTION with fixed cameras, use tripline pulse counting (already implemented in axle_counter.py)
+    # Calculate relative size (large vehicles fill more of frame)
+    relative_size = bbox_height / image_height if image_height > 0 else 0
     
-    # Motorcycles: 2 axles (will be classified as Class 1)
-    if vt == "motorcycle":
+    # PRIORITY 1: Semi trucks are ALWAYS 5+ axles (articulated vehicles)
+    # LVIS class 1113: semi truck
+    if vt == "semi":
+        # Bobtail (tractor only) = 3 axles minimum
+        # With trailer = 5+ axles
+        # Use aspect ratio to distinguish
+        return 5 if aspect_ratio > 3.5 else 3
+    
+    # PRIORITY 2: Buses - typically 2-3 axles
+    # LVIS classes: 172 (bus), 921 (school bus)
+    if vt == "bus":
+        # Large articulated bus or very long bus
+        if aspect_ratio > 4.0 or relative_size > 0.6:
+            return 3
         return 2
     
-    # ALL other vehicles: Default to 2 axles for MVP
-    # The toll_class function will handle Class 1 vs Class 2 distinction
-    # Only detect articulated trucks with trailers as 5+ axles
-    if aspect_ratio > 5.0:  # VERY long (truck + visible trailer)
-        return 5
+    # PRIORITY 3: Box trucks and heavy trucks
+    # LVIS classes: 1122 (truck), 440 (fire truck), 482 (garbage truck), 1106 (tow truck)
+    if vt == "box_truck":
+        # Large fire trucks, garbage trucks often have 3 axles
+        if aspect_ratio > 3.5 or relative_size > 0.5:
+            return 3
+        return 2
     
-    # Conservative default for all vehicles during testing phase
+    # PRIORITY 4: Delivery vans
+    # LVIS class: 691 (minivan)
+    if vt == "delivery_van":
+        return 2
+    
+    # PRIORITY 5: Light vehicles (cars, pickups, motorcycles)
+    # LVIS classes: 206 (car), 799 (pickup), 702 (motorcycle), etc.
+    if vt in ("car", "pickup", "motorcycle"):
+        return 2
+    
+    # FALLBACK: Use aspect ratio heuristic
+    # Very long vehicles = likely articulated or with trailer
+    if aspect_ratio > 5.0:
+        return 5  # Long articulated vehicle with trailer
+    elif aspect_ratio > 4.0:
+        return 3  # Large single-unit truck
+    
+    # Conservative default
     return 2
 
