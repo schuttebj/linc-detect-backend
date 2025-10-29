@@ -171,17 +171,25 @@ def toll_class(
     vehicle_crop: Optional[np.ndarray] = None
 ) -> str:
     """
-    Enhanced toll classification with refined vehicle types from two-stage classification.
+    Enhanced toll classification with refined vehicle types from LVIS-trained YOLO12.
     
     Classification Rules:
-    - Class 1: Light vehicles (cars, pickups, motorcycles)
+    - Class 1: Light vehicles (cars, pickups, motorcycles, bicycles)
     - Class 2: 2-axle heavy vehicles (delivery vans, box trucks, buses)
     - Class 3: 3-4 axles (any combination)
     - Class 4: 5+ axles (heavy articulated vehicles)
     
     Args:
-        vehicle_type: Refined vehicle type from EfficientNet (7 classes):
-                     car, pickup, delivery_van, box_truck, semi, bus, motorcycle
+        vehicle_type: Vehicle type from LVIS YOLO12 model (17 classes → 7 core types):
+                     Core types: car, pickup, delivery_van, box_truck, semi, bus, motorcycle
+                     LVIS mapping:
+                       - car: car, taxi, police car, ambulance
+                       - pickup: pickup truck
+                       - delivery_van: minivan
+                       - box_truck: truck, fire truck, garbage truck, tow truck
+                       - semi: semi truck (articulated)
+                       - bus: bus, school bus
+                       - motorcycle: motorcycle, bicycle, motor scooter, dirt bike
         axle_count: Number of axles detected (from tripline or estimation)
         has_trailer: Whether a trailer was detected
         bbox_height: Bounding box height (for 2-axle classification)
@@ -194,71 +202,57 @@ def toll_class(
     """
     vt = (vehicle_type or "").lower()
     
-    # PRIORITY 1: Motorcycles are ALWAYS Class 1 (regardless of axle count)
-    if vt == "motorcycle":
-        return "Class 1"
+    # PRIORITY 1: Semi trucks are ALWAYS Class 4 (articulated, 5+ axles when fully loaded)
+    # LVIS class 1113: semi truck
+    if vt == "semi":
+        return "Class 4"  # Articulated trucks default to Class 4
     
-    # PRIORITY 2: Axle count thresholds (overrides vehicle type)
+    # PRIORITY 2: Axle count thresholds (overrides vehicle type for accurate counting)
     # Tripline counting is the gold standard for production deployment
     if axle_count >= 5:
         return "Class 4"
     
     if axle_count in (3, 4):
         # Light vehicle + trailer: 2+1 or 2+2 = 3-4 axles → Class 3
-        # Heavy vehicle with 3-4 axles → Class 3
+        # Heavy vehicle with 3-4 axles (larger fire trucks, garbage trucks) → Class 3
         return "Class 3"
     
-    # PRIORITY 3: Two-axle classification with refined vehicle types
-    # This is where the two-stage classifier shines!
+    # PRIORITY 3: Two-axle classification with LVIS-trained vehicle types
     if axle_count == 2:
-        # Class 1: Light vehicles (consumer vehicles)
-        # Note: We don't have 'suv' or 'van' in our 7-class model
-        if vt in ("car", "pickup"):
+        # Class 1: Light vehicles (personal/consumer transport)
+        # LVIS classes: 206 (car), 177 (taxi), 336 (police car), 799 (pickup)
+        #               702 (motorcycle), 700 (motor scooter), 93 (bicycle), 1112 (dirt bike)
+        if vt in ("car", "pickup", "motorcycle"):
             return "Class 1"
         
         # Class 2: Heavy 2-axle vehicles (commercial/public transport)
-        if vt in ("delivery_van", "box_truck", "bus"):
+        # LVIS classes: 172 (bus), 921 (school bus), 691 (minivan/delivery van),
+        #               1122 (truck), 440 (fire truck), 482 (garbage truck),
+        #               1106 (tow truck), 7 (ambulance)
+        if vt in ("bus", "delivery_van", "box_truck"):
             return "Class 2"
-        
-        # Semi with 2 axles (rare, bobtail tractor)
-        if vt == "semi":
-            return "Class 2"
-        
-        # Legacy fallback for old YOLO types
-        if vt in ("bakkie", "minibus"):
-            return "Class 1"
-        
-        # Generic "truck" - use aspect ratio heuristic
-        if vt == "truck":
-            if bbox_height and bbox_width:
-                aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
-                # Long rigid body = commercial truck (Class 2)
-                # Compact = likely pickup/SUV (Class 1)
-                return "Class 2" if aspect_ratio > 3.0 else "Class 1"
-            return "Class 2"  # Default to Class 2 for generic trucks
         
         # Unknown 2-axle vehicle: Conservative default
         return "Class 1"
     
-    # PRIORITY 4: Unknown axle count - use refined type hints
-    # Light vehicle types → Class 1
-    # Note: We don't have 'suv' or 'van' in our 7-class model
-    if vt in ("car", "pickup", "motorcycle"):
+    # PRIORITY 4: Unknown axle count - use LVIS vehicle type hints
+    # Two-wheeled vehicles → Class 1
+    # LVIS: 702 (motorcycle), 700 (motor scooter), 93 (bicycle), 1112 (dirt bike)
+    if vt == "motorcycle":
         return "Class 1"
     
-    # Heavy vehicle types → Class 2 (conservative)
-    if vt in ("delivery_van", "box_truck", "bus", "semi"):
-        return "Class 2"
-    
-    # Legacy light types
-    if vt in LIGHT_TYPES:
+    # Light vehicles → Class 1
+    # LVIS: 206 (car), 177 (taxi), 336 (police car), 799 (pickup)
+    if vt in ("car", "pickup"):
         return "Class 1"
     
-    # Legacy heavy types
-    if vt in HEAVY_TYPES:
+    # Heavy vehicles → Class 2 (conservative for 2-axle assumption)
+    # LVIS: 172 (bus), 921 (school bus), 691 (minivan), 1122 (truck),
+    #       440 (fire truck), 482 (garbage truck), 1106 (tow truck), 7 (ambulance)
+    if vt in ("bus", "delivery_van", "box_truck"):
         return "Class 2"
     
-    # Conservative default
+    # Conservative default (assume light vehicle to avoid overcharging)
     return "Class 1"
 
 
