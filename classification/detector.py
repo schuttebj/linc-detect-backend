@@ -232,18 +232,25 @@ class VehicleDetector:
         "car", "truck", "bus", "motorcycle", "train"
     }
     
-    # LVIS vehicle class IDs and names (1203 total classes)
+    # LVIS vehicle class IDs and names (17 classes trained in our custom model)
     LVIS_VEHICLE_CLASSES = {
-        206: 'car',
-        799: 'pickup',           # ⭐ This is why we use LVIS!
-        1113: 'semi',            # ⭐ Semi truck (articulated)
-        172: 'bus',
-        702: 'motorcycle',
-        691: 'delivery_van',     # Minivan in LVIS
-        1122: 'box_truck',       # Generic truck in LVIS
-        177: 'car',              # Taxi (treat as car)
-        336: 'car',              # Police car (treat as car)
-        921: 'bus',              # School bus
+        7: 'car',                # ambulance (treat as car for toll purposes)
+        93: 'motorcycle',        # bicycle (treat as motorcycle - Class 1)
+        172: 'bus',              # bus
+        177: 'car',              # taxi (treat as car)
+        206: 'car',              # car
+        336: 'car',              # police car (treat as car)
+        440: 'box_truck',        # fire truck (treat as box truck)
+        482: 'box_truck',        # garbage truck (treat as box truck)
+        691: 'delivery_van',     # minivan / delivery van
+        700: 'motorcycle',       # motor scooter
+        702: 'motorcycle',       # motorcycle
+        799: 'pickup',           # ⭐ pickup truck
+        921: 'bus',              # school bus
+        1106: 'box_truck',       # tow truck
+        1112: 'motorcycle',      # dirt bike
+        1113: 'semi',            # ⭐ semi truck (articulated)
+        1122: 'box_truck',       # truck (generic)
     }
     
     def __init__(self, model_path: str = "yolo12n", confidence: float = 0.25):
