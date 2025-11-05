@@ -67,8 +67,16 @@ CLIP_VEHICLE_LABELS_BINARY = [
     "a photo of an articulated lorry"
 ]
 
-# Active configuration - switch between approaches
-USE_BINARY_APPROACH = False  # Set to True to test binary classification
+# Import configuration (can be overridden by clip_config.py)
+try:
+    from clip_config import USE_BINARY_APPROACH as CONFIG_USE_BINARY
+    USE_BINARY_APPROACH = CONFIG_USE_BINARY
+    print(f"📋 Using CLIP config: {'Binary' if USE_BINARY_APPROACH else 'Detailed'} approach")
+except ImportError:
+    USE_BINARY_APPROACH = False  # Default: detailed approach
+    print("📋 Using default: Detailed approach (clip_config.py not found)")
+
+# Active configuration
 CLIP_VEHICLE_LABELS = CLIP_VEHICLE_LABELS_BINARY if USE_BINARY_APPROACH else CLIP_VEHICLE_LABELS_DETAILED
 
 # Color labels for CLIP classification

@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
 
+# Try to import CLIP configuration from clip_config.py
+try:
+    from clip_config import CLIP_MODEL as CONFIG_CLIP_MODEL
+    print(f"📋 CLIP config found - using model: {CONFIG_CLIP_MODEL}")
+    # Override default if not set via environment
+    import os
+    if "CLIP_MODEL" not in os.environ:
+        Settings.__fields__["clip_model"].default = CONFIG_CLIP_MODEL
+except ImportError:
+    print("📋 No clip_config.py found - using environment variables or defaults")
 
 settings = Settings()
 
