@@ -70,9 +70,11 @@ async def lifespan(app: FastAPI):
     model_name = settings.yolo_model.replace('.pt', '')
     detector = VehicleDetector(
         model_path=model_name,
-        confidence=settings.yolo_confidence
+        confidence=settings.yolo_confidence,
+        clip_model_name="openai/clip-vit-base-patch32",  # Start with base model
+        use_clip=True
     )
-    print("✅ Model loaded successfully!")
+    print("✅ YOLO and CLIP models loaded successfully!")
     
     # Initialize database
     db = await get_database()
@@ -321,6 +323,11 @@ async def classify_image(file: UploadFile = File(...)):
             "image_url": f"/uploads/{file_path.name}",
             "annotated_image_url": f"/uploads/{annotated_path.name}",
             "bbox": result["bbox"],
+            "primary_color": result.get("primary_color"),
+            "clip_vehicle_results": result.get("clip_vehicle_results", []),
+            "clip_color_results": result.get("clip_color_results", []),
+            "clip_inference_time_ms": result.get("clip_inference_time_ms", 0.0),
+            "clip_model": result.get("clip_model"),
             "debug": result.get("debug", {})  # Include debug information
         }
         
@@ -611,6 +618,8 @@ manager = ConnectionManager()
 # Global configuration
 model_config = {
     "yolo_confidence": 0.25,      # YOLO detection confidence
+    "use_clip": True,             # Use CLIP for classification
+    "clip_model": "openai/clip-vit-base-patch32"  # CLIP model name
 }
 
 @app.get("/api/config")
@@ -621,8 +630,11 @@ async def get_config():
     
     return {
         "model_config": model_config,
-        "model_type": "LVIS" if detector.is_lvis_model else "COCO",
-        "model_loaded": detector.model is not None,
+        "yolo_model_type": "LVIS" if detector.is_lvis_model else "COCO",
+        "yolo_model_loaded": detector.model is not None,
+        "clip_enabled": detector.use_clip,
+        "clip_model": detector.clip_model_name if detector.use_clip else None,
+        "clip_model_loaded": detector.clip_model is not None,
         "vehicle_classes": list(detector.LVIS_VEHICLE_CLASSES.values()) if detector.is_lvis_model else list(detector.COCO_VEHICLE_CLASSES)
     }
 
@@ -639,7 +651,57 @@ async def update_config(config: dict):
         else:
             raise HTTPException(status_code=400, detail="YOLO confidence must be between 0.0 and 1.0")
     
+    if "use_clip" in config:
+        use_clip = bool(config["use_clip"])
+        model_config["use_clip"] = use_clip
+        if detector:
+            detector.use_clip = use_clip
+    
     return {"message": "Configuration updated", "config": model_config}
+
+@app.post("/api/config/clip-model")
+async def switch_clip_model(model_name: str):
+    """
+    Switch CLIP model between base and large.
+    
+    Args:
+        model_name: "base" for openai/clip-vit-base-patch32 or "large" for openai/clip-vit-large-patch14
+    
+    Returns:
+        Success message with new model info
+    """
+    if not detector:
+        raise HTTPException(status_code=500, detail="Detector not initialized")
+    
+    # Map short names to full model names
+    model_mapping = {
+        "base": "openai/clip-vit-base-patch32",
+        "large": "openai/clip-vit-large-patch14"
+    }
+    
+    # Allow full model names too
+    if model_name in model_mapping:
+        full_model_name = model_mapping[model_name]
+    elif model_name in model_mapping.values():
+        full_model_name = model_name
+    else:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid model name. Use 'base' or 'large', or full model name"
+        )
+    
+    try:
+        print(f"Switching CLIP model to: {full_model_name}")
+        detector.load_clip_model(full_model_name)
+        model_config["clip_model"] = full_model_name
+        
+        return {
+            "message": f"CLIP model switched to {full_model_name}",
+            "model_name": full_model_name,
+            "short_name": "base" if "base" in full_model_name else "large"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch model: {str(e)}")
 
 
 @app.websocket("/ws")

@@ -1,8 +1,10 @@
 """
-YOLO11n vehicle detection wrapper.
+YOLO11n vehicle detection with CLIP classification.
+Uses YOLO for bounding box detection and CLIP for vehicle type and color classification.
 """
 
 import os
+import time
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import numpy as np
@@ -10,8 +12,66 @@ import torch
 import torch.nn as nn
 from ultralytics import YOLO
 from PIL import Image
+from transformers import CLIPProcessor, CLIPModel
 
 from .rules import toll_class, estimate_axles_from_detection
+
+
+# ============================================================================
+# CLIP Classification Labels
+# ============================================================================
+
+# Vehicle type labels for CLIP classification
+CLIP_VEHICLE_LABELS = [
+    "a photo of a car",
+    "a photo of a semitruck",
+    "a photo of a bus",
+    "a photo of a van",
+    "a photo of a pickup truck",
+    "a photo of a jeep",
+    "a photo of an SUV",
+    "a photo of a motorcycle",
+    "a photo of a bicycle",
+    "a photo of a train",
+    "a photo of a trailer"
+]
+
+# Color labels for CLIP classification
+CLIP_COLOR_LABELS = [
+    "a red vehicle",
+    "a blue vehicle",
+    "a white vehicle",
+    "a black vehicle",
+    "a gray vehicle",
+    "a silver vehicle",
+    "a green vehicle",
+    "a yellow vehicle",
+    "an orange vehicle",
+    "a brown vehicle",
+    "a gold vehicle",
+    "a purple vehicle"
+]
+
+# Mapping from CLIP labels to standardized vehicle types
+CLIP_TO_VEHICLE_TYPE = {
+    "car": "car",
+    "semitruck": "semi",
+    "bus": "bus",
+    "van": "van",
+    "pickup truck": "pickup",
+    "jeep": "suv",  # Treat jeep as SUV for toll purposes
+    "SUV": "suv",
+    "motorcycle": "motorcycle",
+    "bicycle": "motorcycle",  # Treat bicycle as motorcycle for Class 1
+    "train": "semi",  # Rare misclassification, treat as semi
+    "trailer": "trailer"
+}
+
+# Vehicle type groups for handling similar classifications
+LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "jeep"}
+HEAVY_VEHICLE_GROUP = {"semi", "semitruck", "trailer"}
+COMMERCIAL_VEHICLE_GROUP = {"van", "bus"}
+
 
 # Allow required classes for PyTorch 2.6+ weights_only loading of YOLO models
 # We trust Ultralytics models from official GitHub releases
@@ -253,16 +313,26 @@ class VehicleDetector:
         1122: 'box_truck',       # truck (generic)
     }
     
-    def __init__(self, model_path: str = "yolo12n", confidence: float = 0.25):
+    def __init__(
+        self, 
+        model_path: str = "yolo12n", 
+        confidence: float = 0.25,
+        clip_model_name: str = "openai/clip-vit-base-patch32",
+        use_clip: bool = True
+    ):
         """
-        Initialize the vehicle detector.
+        Initialize the vehicle detector with YOLO and CLIP.
         
         Args:
             model_path: YOLO model name (e.g., "yolo12n" for COCO, "yolo12n_lvis" for LVIS-trained)
-            confidence: Confidence threshold for detections
+            confidence: Confidence threshold for YOLO detections
+            clip_model_name: CLIP model name ("openai/clip-vit-base-patch32" or "openai/clip-vit-large-patch14")
+            use_clip: Whether to use CLIP for classification (if False, falls back to YOLO-based classification)
         """
         self.confidence = confidence
         self.model_path = model_path
+        self.use_clip = use_clip
+        self.clip_model_name = clip_model_name
         
         print(f"Initializing YOLO model: {model_path}")
         
@@ -299,6 +369,12 @@ class VehicleDetector:
         
         # Detect if this is LVIS-trained model (has 1203 classes) or COCO (80 classes)
         self.is_lvis_model = self._detect_model_type()
+        
+        # Initialize CLIP models if enabled
+        self.clip_model = None
+        self.clip_processor = None
+        if use_clip:
+            self.load_clip_model(clip_model_name)
     
     def _detect_model_type(self) -> bool:
         """Detect if model is LVIS-trained or COCO-trained."""
@@ -317,6 +393,247 @@ class VehicleDetector:
             print("⚠️  Could not detect model type, assuming COCO")
             return False
     
+    def load_clip_model(self, model_name: str):
+        """
+        Load CLIP model for vehicle and color classification.
+        
+        Args:
+            model_name: CLIP model name (e.g., "openai/clip-vit-base-patch32" or "openai/clip-vit-large-patch14")
+        """
+        print(f"Loading CLIP model: {model_name}")
+        try:
+            self.clip_model = CLIPModel.from_pretrained(model_name)
+            self.clip_processor = CLIPProcessor.from_pretrained(model_name)
+            self.clip_model_name = model_name
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                self.clip_model = self.clip_model.cuda()
+                print(f"✅ CLIP model '{model_name}' loaded on GPU!")
+            else:
+                print(f"✅ CLIP model '{model_name}' loaded on CPU!")
+        except Exception as e:
+            print(f"❌ Failed to load CLIP model: {e}")
+            print("⚠️  Falling back to YOLO-based classification")
+            self.use_clip = False
+    
+    def classify_vehicle_with_clip(
+        self, 
+        vehicle_crop: np.ndarray, 
+        top_k: int = 5
+    ) -> List[Dict[str, float]]:
+        """
+        Classify vehicle type using CLIP model.
+        
+        Args:
+            vehicle_crop: Cropped vehicle image (numpy array, BGR format)
+            top_k: Number of top predictions to return
+        
+        Returns:
+            List of dicts with 'label' and 'confidence' keys, sorted by confidence
+        """
+        if self.clip_model is None or self.clip_processor is None:
+            return []
+        
+        try:
+            # Convert BGR to RGB
+            if len(vehicle_crop.shape) == 3 and vehicle_crop.shape[2] == 3:
+                vehicle_crop_rgb = vehicle_crop[:, :, ::-1].copy()
+            else:
+                vehicle_crop_rgb = vehicle_crop
+            
+            # Convert to PIL Image
+            pil_image = Image.fromarray(vehicle_crop_rgb)
+            
+            # Process with CLIP
+            inputs = self.clip_processor(
+                text=CLIP_VEHICLE_LABELS, 
+                images=pil_image, 
+                return_tensors="pt", 
+                padding=True
+            )
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+            # Get predictions
+            with torch.no_grad():
+                outputs = self.clip_model(**inputs)
+            
+            # Calculate probabilities
+            logits_per_image = outputs.logits_per_image
+            probs = logits_per_image.softmax(dim=1)[0]
+            
+            # Get top-k results
+            sorted_indices = torch.argsort(probs, descending=True)[:top_k]
+            
+            results = []
+            for idx in sorted_indices:
+                label = CLIP_VEHICLE_LABELS[idx].replace("a photo of a ", "").replace("a photo of an ", "")
+                confidence = probs[idx].item()
+                results.append({
+                    "label": label,
+                    "confidence": confidence
+                })
+            
+            return results
+        
+        except Exception as e:
+            print(f"❌ CLIP vehicle classification failed: {e}")
+            return []
+    
+    def classify_color_with_clip(
+        self, 
+        vehicle_crop: np.ndarray, 
+        top_k: int = 3
+    ) -> List[Dict[str, float]]:
+        """
+        Classify vehicle color using CLIP model.
+        
+        Args:
+            vehicle_crop: Cropped vehicle image (numpy array, BGR format)
+            top_k: Number of top predictions to return
+        
+        Returns:
+            List of dicts with 'color' and 'confidence' keys, sorted by confidence
+        """
+        if self.clip_model is None or self.clip_processor is None:
+            return []
+        
+        try:
+            # Convert BGR to RGB
+            if len(vehicle_crop.shape) == 3 and vehicle_crop.shape[2] == 3:
+                vehicle_crop_rgb = vehicle_crop[:, :, ::-1].copy()
+            else:
+                vehicle_crop_rgb = vehicle_crop
+            
+            # Convert to PIL Image
+            pil_image = Image.fromarray(vehicle_crop_rgb)
+            
+            # Process with CLIP
+            inputs = self.clip_processor(
+                text=CLIP_COLOR_LABELS, 
+                images=pil_image, 
+                return_tensors="pt", 
+                padding=True
+            )
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+            
+            # Get predictions
+            with torch.no_grad():
+                outputs = self.clip_model(**inputs)
+            
+            # Calculate probabilities
+            logits_per_image = outputs.logits_per_image
+            probs = logits_per_image.softmax(dim=1)[0]
+            
+            # Get top-k results
+            sorted_indices = torch.argsort(probs, descending=True)[:top_k]
+            
+            results = []
+            for idx in sorted_indices:
+                color = CLIP_COLOR_LABELS[idx].replace("a ", "").replace(" vehicle", "")
+                confidence = probs[idx].item()
+                results.append({
+                    "color": color,
+                    "confidence": confidence
+                })
+            
+            return results
+        
+        except Exception as e:
+            print(f"❌ CLIP color classification failed: {e}")
+            return []
+    
+    def resolve_ambiguous_classification(
+        self, 
+        vehicle_results: List[Dict[str, float]],
+        bbox_height: float,
+        bbox_width: float,
+        image_height: float
+    ) -> Tuple[str, str]:
+        """
+        Resolve ambiguous vehicle classifications using smart logic.
+        
+        Handles cases where top results are close (e.g., pickup: 0.52, SUV: 0.48).
+        
+        Args:
+            vehicle_results: Top K vehicle classification results
+            bbox_height: Bounding box height
+            bbox_width: Bounding box width
+            image_height: Image height
+        
+        Returns:
+            Tuple of (selected_vehicle_type, decision_reason)
+        """
+        if not vehicle_results or len(vehicle_results) == 0:
+            return "car", "No CLIP results, defaulting to car"
+        
+        # Single result - use it
+        if len(vehicle_results) == 1:
+            label = vehicle_results[0]["label"]
+            vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label, "car")
+            return vehicle_type, f"Single result: {label}"
+        
+        # Get top 2 results
+        top1 = vehicle_results[0]
+        top2 = vehicle_results[1]
+        
+        label1 = top1["label"]
+        label2 = top2["label"]
+        conf1 = top1["confidence"]
+        conf2 = top2["confidence"]
+        
+        # Check confidence gap
+        conf_gap = conf1 - conf2
+        
+        # Clear winner (>15% gap)
+        if conf_gap > 0.15:
+            vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
+            return vehicle_type, f"Clear winner: {label1} ({conf1:.3f})"
+        
+        # Check if both are in same vehicle group
+        type1 = CLIP_TO_VEHICLE_TYPE.get(label1, label1)
+        type2 = CLIP_TO_VEHICLE_TYPE.get(label2, label2)
+        
+        # Both in light vehicle group (car, pickup, SUV, jeep)
+        if type1 in LIGHT_VEHICLE_GROUP and type2 in LIGHT_VEHICLE_GROUP:
+            # Use aspect ratio as tiebreaker
+            aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
+            
+            # Long/wide vehicles (pickup trucks tend to be longer)
+            if aspect_ratio > 2.2 and "pickup" in [type1, type2]:
+                return "pickup", f"Aspect ratio tiebreaker: {aspect_ratio:.2f} suggests pickup"
+            
+            # Use higher confidence (they're all Class 1 anyway)
+            vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
+            return vehicle_type, f"Light vehicle group, using top: {label1} ({conf1:.3f})"
+        
+        # Contradicting classes (e.g., pickup vs semi) - this is suspicious
+        if (type1 in LIGHT_VEHICLE_GROUP and type2 in HEAVY_VEHICLE_GROUP) or \
+           (type1 in HEAVY_VEHICLE_GROUP and type2 in LIGHT_VEHICLE_GROUP):
+            
+            # Use relative size to help decide
+            relative_size = bbox_height / image_height if image_height > 0 else 0
+            
+            # Large object in frame suggests heavy vehicle
+            if relative_size > 0.6 and conf_gap < 0.10:
+                # If heavy vehicle is in top 2 and object is large, prefer heavy
+                heavy_type = type1 if type1 in HEAVY_VEHICLE_GROUP else type2
+                return heavy_type, f"Large object ({relative_size:.2f}) suggests heavy vehicle"
+            
+            # Otherwise, trust CLIP's top pick
+            vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
+            return vehicle_type, f"Contradicting classes, trusting top: {label1} ({conf1:.3f})"
+        
+        # Default: use top result
+        vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
+        return vehicle_type, f"Using top result: {label1} ({conf1:.3f})"
+    
     def detect_vehicles(
         self, 
         image: np.ndarray,
@@ -324,19 +641,19 @@ class VehicleDetector:
         confidence_threshold: float = 0.5
     ) -> List[Dict]:
         """
-        Detect vehicles in an image using YOLO.
+        Detect vehicles in an image using YOLO + CLIP.
         
-        Supports both COCO-trained (generic car/truck/bus) and LVIS-trained (pickup/semi/etc) models.
+        YOLO provides bounding boxes, CLIP classifies vehicle type and color.
         
         Args:
             image: Input image as numpy array (BGR format from OpenCV)
-            imgsz: Input image size for model
+            imgsz: Input image size for YOLO model
             confidence_threshold: Unused (kept for API compatibility)
         
         Returns:
-            List of detected vehicles with metadata
+            List of detected vehicles with metadata including CLIP classifications
         """
-        # Run YOLO inference (Stage 1: Detection)
+        # Run YOLO inference (Stage 1: Bounding Box Detection)
         results = self.model.predict(
             image, 
             imgsz=imgsz, 
@@ -362,56 +679,82 @@ class VehicleDetector:
         for box, area in boxes_with_area:
             class_id = int(box.cls.item())
             
-            # Process based on model type (COCO or LVIS)
+            # Process based on model type (COCO or LVIS) - just for filtering vehicles
+            is_vehicle = False
             if self.is_lvis_model:
                 # LVIS model: Check if class_id is in our vehicle mapping
-                if class_id not in self.LVIS_VEHICLE_CLASSES:
-                    continue
-                
-                # Get refined vehicle type directly from LVIS
-                vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
-                yolo_class = vehicle_type  # For debug info
-                
-                print(f"\n🚗 LVIS Detection: class_id={class_id} → {vehicle_type}")
-                
+                if class_id in self.LVIS_VEHICLE_CLASSES:
+                    is_vehicle = True
+                    yolo_class = self.LVIS_VEHICLE_CLASSES[class_id]
             else:
-                # COCO model: Use generic classes and map them
+                # COCO model: Use generic classes
                 yolo_class = results.names[class_id].lower()
-                
-                # Only process vehicle classes
-                if yolo_class not in self.COCO_VEHICLE_CLASSES:
-                    continue
-                
-                print(f"\n🚗 COCO Detection: {yolo_class}")
-                vehicle_type = None  # Will be mapped later
+                if yolo_class in self.COCO_VEHICLE_CLASSES:
+                    is_vehicle = True
+            
+            if not is_vehicle:
+                continue
+            
+            print(f"\n🚗 Vehicle Detection: YOLO class={yolo_class}")
             
             # Extract box coordinates
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            confidence = float(box.conf.item())
+            yolo_confidence = float(box.conf.item())
             
             # Calculate box dimensions
             bbox_width = x2 - x1
             bbox_height = y2 - y1
             
-            # Crop vehicle from image for reference
+            # Crop vehicle from image for CLIP classification
             vehicle_crop = image[y1:y2, x1:x2, :].copy() if (y2 > y1 and x2 > x1) else None
             
-            # Debug info
-            debug_info = {
-                "model_type": "LVIS" if self.is_lvis_model else "COCO",
-                "class_id": class_id,
-                "yolo_class": yolo_class,
-                "yolo_confidence": confidence,
-                "crop_size": vehicle_crop.shape if vehicle_crop is not None else None,
-            }
+            if vehicle_crop is None or vehicle_crop.size == 0:
+                print("⚠️  Invalid crop, skipping...")
+                continue
             
-            # Map COCO classes to refined types if needed
-            if not self.is_lvis_model:
-                vehicle_type = self._map_yolo_to_refined(yolo_class)
-                debug_info["mapped_type"] = vehicle_type
-                print(f"   Mapped to: {vehicle_type}")
+            # Stage 2: CLIP Classification (if enabled)
+            vehicle_type = None
+            clip_vehicle_results = []
+            clip_color_results = []
+            decision_reason = "YOLO-based classification (CLIP disabled)"
+            clip_inference_time = 0.0
+            
+            if self.use_clip and vehicle_crop is not None:
+                clip_start = time.time()
+                
+                # Classify vehicle type with CLIP
+                clip_vehicle_results = self.classify_vehicle_with_clip(vehicle_crop, top_k=5)
+                
+                # Classify color with CLIP
+                clip_color_results = self.classify_color_with_clip(vehicle_crop, top_k=3)
+                
+                clip_inference_time = (time.time() - clip_start) * 1000  # milliseconds
+                
+                if clip_vehicle_results:
+                    # Resolve ambiguous classifications
+                    vehicle_type, decision_reason = self.resolve_ambiguous_classification(
+                        clip_vehicle_results,
+                        bbox_height,
+                        bbox_width,
+                        image_height
+                    )
+                    print(f"   CLIP: {vehicle_type} | {decision_reason}")
+                    print(f"   CLIP Inference: {clip_inference_time:.1f}ms")
+                else:
+                    # Fallback to YOLO-based classification
+                    if self.is_lvis_model:
+                        vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
+                    else:
+                        vehicle_type = self._map_yolo_to_refined(yolo_class)
+                    decision_reason = "CLIP failed, using YOLO classification"
+                    print(f"   ⚠️  {decision_reason}: {vehicle_type}")
             else:
-                debug_info["lvis_direct"] = True
+                # Fallback to YOLO-based classification
+                if self.is_lvis_model:
+                    vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
+                else:
+                    vehicle_type = self._map_yolo_to_refined(yolo_class)
+                print(f"   YOLO: {vehicle_type}")
             
             # Estimate axles from bounding box heuristics
             estimated_axles = estimate_axles_from_detection(
@@ -432,10 +775,14 @@ class VehicleDetector:
                 vehicle_crop=vehicle_crop
             )
             
+            # Extract primary color
+            primary_color = clip_color_results[0]["color"] if clip_color_results else None
+            
+            # Build detection result
             detection = {
                 "vehicle_type": vehicle_type,
                 "yolo_class": yolo_class,  # Keep original for debugging
-                "confidence": confidence,
+                "confidence": yolo_confidence,  # YOLO bbox confidence
                 "bbox": {
                     "x1": x1,
                     "y1": y1,
@@ -446,7 +793,20 @@ class VehicleDetector:
                 },
                 "axle_count": estimated_axles,
                 "predicted_class": predicted_class,
-                "debug": debug_info  # Add debug information
+                "primary_color": primary_color,
+                "clip_vehicle_results": clip_vehicle_results,
+                "clip_color_results": clip_color_results,
+                "clip_inference_time_ms": clip_inference_time,
+                "clip_model": self.clip_model_name if self.use_clip else None,
+                "debug": {
+                    "model_type": "LVIS" if self.is_lvis_model else "COCO",
+                    "class_id": class_id,
+                    "yolo_class": yolo_class,
+                    "yolo_confidence": yolo_confidence,
+                    "crop_size": vehicle_crop.shape if vehicle_crop is not None else None,
+                    "decision": decision_reason,
+                    "clip_enabled": self.use_clip
+                }
             }
             
             detections.append(detection)

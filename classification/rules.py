@@ -15,9 +15,9 @@ from typing import Optional
 import numpy as np
 import cv2
 
-# Vehicle type categories
-LIGHT_TYPES = {"car", "pickup", "bakkie", "suv", "minibus", "van", "motorcycle"}
-HEAVY_TYPES = {"truck", "bus", "lorry", "tractor"}
+# Vehicle type categories (includes CLIP types)
+LIGHT_TYPES = {"car", "pickup", "bakkie", "suv", "jeep", "minibus", "van", "motorcycle"}
+HEAVY_TYPES = {"truck", "bus", "lorry", "tractor", "semi"}
 
 # Thresholds for visual feature analysis
 BOXINESS_THRESHOLD = 0.18        # Edge density in rectangular regions (higher = stricter)
@@ -217,39 +217,44 @@ def toll_class(
         # Heavy vehicle with 3-4 axles (larger fire trucks, garbage trucks) → Class 3
         return "Class 3"
     
-    # PRIORITY 3: Two-axle classification with LVIS-trained vehicle types
+    # PRIORITY 3: Two-axle classification with CLIP/LVIS vehicle types
     if axle_count == 2:
         # Class 1: Light vehicles (personal/consumer transport)
+        # CLIP types: car, pickup, suv, jeep, motorcycle
         # LVIS classes: 206 (car), 177 (taxi), 336 (police car), 799 (pickup)
         #               702 (motorcycle), 700 (motor scooter), 93 (bicycle), 1112 (dirt bike)
-        if vt in ("car", "pickup", "motorcycle"):
+        if vt in ("car", "pickup", "suv", "jeep", "motorcycle"):
             return "Class 1"
         
         # Class 2: Heavy 2-axle vehicles (commercial/public transport)
+        # CLIP types: van, bus
         # LVIS classes: 172 (bus), 921 (school bus), 691 (minivan/delivery van),
         #               1122 (truck), 440 (fire truck), 482 (garbage truck),
         #               1106 (tow truck), 7 (ambulance)
-        if vt in ("bus", "delivery_van", "box_truck"):
+        if vt in ("bus", "van", "delivery_van", "box_truck"):
             return "Class 2"
         
         # Unknown 2-axle vehicle: Conservative default
         return "Class 1"
     
-    # PRIORITY 4: Unknown axle count - use LVIS vehicle type hints
+    # PRIORITY 4: Unknown axle count - use CLIP/LVIS vehicle type hints
     # Two-wheeled vehicles → Class 1
+    # CLIP: motorcycle
     # LVIS: 702 (motorcycle), 700 (motor scooter), 93 (bicycle), 1112 (dirt bike)
     if vt == "motorcycle":
         return "Class 1"
     
     # Light vehicles → Class 1
+    # CLIP: car, pickup, suv, jeep
     # LVIS: 206 (car), 177 (taxi), 336 (police car), 799 (pickup)
-    if vt in ("car", "pickup"):
+    if vt in ("car", "pickup", "suv", "jeep"):
         return "Class 1"
     
     # Heavy vehicles → Class 2 (conservative for 2-axle assumption)
+    # CLIP: van, bus
     # LVIS: 172 (bus), 921 (school bus), 691 (minivan), 1122 (truck),
     #       440 (fire truck), 482 (garbage truck), 1106 (tow truck), 7 (ambulance)
-    if vt in ("bus", "delivery_van", "box_truck"):
+    if vt in ("bus", "van", "delivery_van", "box_truck"):
         return "Class 2"
     
     # Conservative default (assume light vehicle to avoid overcharging)
@@ -314,9 +319,10 @@ def estimate_axles_from_detection(
     if vt == "delivery_van":
         return 2
     
-    # PRIORITY 5: Light vehicles (cars, pickups, motorcycles)
+    # PRIORITY 5: Light vehicles (cars, pickups, SUVs, motorcycles)
+    # CLIP types: car, pickup, suv, jeep, motorcycle
     # LVIS classes: 206 (car), 799 (pickup), 702 (motorcycle), etc.
-    if vt in ("car", "pickup", "motorcycle"):
+    if vt in ("car", "pickup", "suv", "jeep", "motorcycle"):
         return 2
     
     # FALLBACK: Use aspect ratio heuristic

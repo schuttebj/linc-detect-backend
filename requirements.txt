@@ -11,9 +11,13 @@ python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# PyTorch for EfficientNet-B0 vehicle classifier
+# PyTorch for CLIP models
 torch==2.1.0
 torchvision==0.16.0
+
+# CLIP models for vehicle and color classification
+transformers>=4.35.0
+requests>=2.31.0
 
 # Training utilities
 tqdm==4.66.1
