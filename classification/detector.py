@@ -30,45 +30,46 @@ except ImportError:
 # ============================================================================
 
 # Vehicle type labels for CLIP classification
-# Optimized for South African toll classification
-CLIP_VEHICLE_LABELS = [
-    # Class 1: Light vehicles (passenger vehicles, light delivery)
-    "a photo of a passenger car",
-    "a photo of a sedan",
-    "a photo of a hatchback",
+# APPROACH 1: Simplified distinct categories (11 labels)
+CLIP_VEHICLE_LABELS_DETAILED = [
+    # Class 1: Light vehicles
+    "a photo of a car",
     "a photo of a pickup truck",
-    "a photo of a bakkie",  # South African term for pickup
     "a photo of an SUV",
-    "a photo of a 4x4 vehicle",
-    "a photo of a jeep",
-    "a photo of a minibus taxi",
-    "a photo of a light delivery van",
-    "a photo of a panel van",
+    "a photo of a minivan",
     "a photo of a motorcycle",
-    "a photo of a motorbike",
     
     # Class 2: Heavy 2-axle vehicles
-    "a photo of a large delivery truck",
-    "a photo of a box truck",
-    "a photo of a medium duty truck",
-    "a photo of a refuse truck",
-    "a photo of a fire truck",
-    "a photo of a tour bus",
-    "a photo of a coach bus",
-    "a photo of a city bus",
+    "a photo of a delivery truck",
+    "a photo of a bus",
     
     # Class 3-4: Heavy multi-axle vehicles
-    "a photo of an articulated truck",
-    "a photo of a semi-trailer truck",
-    "a photo of an 18-wheeler truck",
-    "a photo of a heavy goods vehicle",
-    "a photo of a long haul truck",
+    "a photo of a semi truck",
     "a photo of a truck with trailer",
     
     # Additional
-    "a photo of a trailer",
-    "a photo of a caravan"
+    "a photo of a trailer"
 ]
+
+# APPROACH 2: Binary Light vs Heavy (8 labels) - Testing
+# Focus on weight/commercial use distinction
+CLIP_VEHICLE_LABELS_BINARY = [
+    # Light vehicles (under 3.5 tons, private/light commercial)
+    "a photo of a light passenger vehicle",
+    "a photo of a private car",
+    "a photo of a light truck",
+    "a photo of a motorcycle",
+    
+    # Heavy vehicles (over 3.5 tons, commercial/industrial)
+    "a photo of a heavy commercial vehicle",
+    "a photo of a large truck",
+    "a photo of a commercial bus",
+    "a photo of an articulated lorry"
+]
+
+# Active configuration - switch between approaches
+USE_BINARY_APPROACH = False  # Set to True to test binary classification
+CLIP_VEHICLE_LABELS = CLIP_VEHICLE_LABELS_BINARY if USE_BINARY_APPROACH else CLIP_VEHICLE_LABELS_DETAILED
 
 # Color labels for CLIP classification
 CLIP_COLOR_LABELS = [
@@ -87,49 +88,49 @@ CLIP_COLOR_LABELS = [
 ]
 
 # Mapping from CLIP labels to standardized vehicle types for toll classification
-CLIP_TO_VEHICLE_TYPE = {
+# Detailed approach mapping
+CLIP_TO_VEHICLE_TYPE_DETAILED = {
     # Class 1: Light vehicles
-    "passenger car": "car",
-    "sedan": "car",
-    "hatchback": "car",
+    "car": "car",
     "pickup truck": "pickup",
-    "bakkie": "pickup",
     "SUV": "suv",
-    "4x4 vehicle": "suv",
-    "jeep": "suv",
-    "minibus taxi": "light_van",  # Minibus taxi is Class 1 in SA
-    "light delivery van": "light_van",
-    "panel van": "light_van",
+    "minivan": "light_van",
     "motorcycle": "motorcycle",
-    "motorbike": "motorcycle",
     
     # Class 2: Heavy 2-axle vehicles
-    "large delivery truck": "heavy_truck_2axle",
-    "box truck": "heavy_truck_2axle",
-    "medium duty truck": "heavy_truck_2axle",
-    "refuse truck": "heavy_truck_2axle",
-    "fire truck": "heavy_truck_2axle",
-    "tour bus": "bus",
-    "coach bus": "bus",
-    "city bus": "bus",
+    "delivery truck": "heavy_truck_2axle",
+    "bus": "bus",
     
     # Class 3-4: Heavy multi-axle vehicles
-    "articulated truck": "semi",
-    "semi-trailer truck": "semi",
-    "18-wheeler truck": "semi",
-    "heavy goods vehicle": "semi",
-    "long haul truck": "semi",
+    "semi truck": "semi",
     "truck with trailer": "semi",
     
     # Additional
-    "trailer": "trailer",
-    "caravan": "trailer"
+    "trailer": "trailer"
 }
 
+# Binary approach mapping (light vs heavy only)
+CLIP_TO_VEHICLE_TYPE_BINARY = {
+    # Light vehicles (all map to generic "light" category)
+    "light passenger vehicle": "light_vehicle",
+    "private car": "light_vehicle",
+    "light truck": "light_vehicle",
+    "motorcycle": "motorcycle",
+    
+    # Heavy vehicles (all map to generic "heavy" category)
+    "heavy commercial vehicle": "heavy_vehicle",
+    "large truck": "heavy_vehicle",
+    "commercial bus": "heavy_vehicle",
+    "articulated lorry": "heavy_vehicle"
+}
+
+# Active mapping
+CLIP_TO_VEHICLE_TYPE = CLIP_TO_VEHICLE_TYPE_BINARY if USE_BINARY_APPROACH else CLIP_TO_VEHICLE_TYPE_DETAILED
+
 # Vehicle type groups for South African toll classification
-LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "light_van", "motorcycle"}  # Class 1
+LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "light_van", "motorcycle", "light_vehicle"}  # Class 1
 HEAVY_2AXLE_GROUP = {"heavy_truck_2axle", "bus"}  # Class 2 (2-axle heavy)
-HEAVY_MULTAXLE_GROUP = {"semi", "trailer"}  # Class 3-4 (3+ axles)
+HEAVY_MULTAXLE_GROUP = {"semi", "trailer", "heavy_vehicle"}  # Class 3-4 (3+ axles)
 
 
 # Allow required classes for PyTorch 2.6+ weights_only loading of YOLO models
