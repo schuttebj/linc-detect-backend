@@ -361,9 +361,12 @@ async def classify_image(file: UploadFile = File(...)):
             "bbox": result["bbox"],
             "primary_color": result.get("primary_color"),
             "clip_vehicle_results": result.get("clip_vehicle_results", []),
+            "clip_vehicle_results_detailed": result.get("clip_vehicle_results_detailed", []),
+            "clip_vehicle_results_binary": result.get("clip_vehicle_results_binary", []),
             "clip_color_results": result.get("clip_color_results", []),
             "clip_inference_time_ms": result.get("clip_inference_time_ms", 0.0),
             "clip_model": result.get("clip_model"),
+            "clip_approach": result.get("clip_approach", "detailed"),
             "debug": result.get("debug", {})  # Include debug information
         }
         
