@@ -30,55 +30,24 @@ except ImportError:
 # ============================================================================
 
 # Vehicle type labels for CLIP classification
-# APPROACH 1: Simplified distinct categories (11 labels)
-CLIP_VEHICLE_LABELS_DETAILED = [
-    # Class 1: Light vehicles
+# Simple, clear categories based on visual differences
+CLIP_VEHICLE_LABELS = [
     "a photo of a car",
-    "a photo of a pickup truck",
+    "a photo of a pickup",
     "a photo of an SUV",
-    "a photo of a minivan",
-    "a photo of a motorcycle",
-    
-    # Class 2: Heavy 2-axle vehicles
-    "a photo of a delivery truck",
+    "a photo of a van",
     "a photo of a bus",
-    
-    # Class 3-4: Heavy multi-axle vehicles
-    "a photo of a semi truck",
-    "a photo of a truck with trailer",
-    
-    # Additional
+    "a photo of a semitruck",
+    "a photo of a motorcycle",
     "a photo of a trailer"
 ]
 
-# APPROACH 2: Binary Light vs Heavy (8 labels) - Testing
-# Focus on weight/commercial use distinction
-CLIP_VEHICLE_LABELS_BINARY = [
-    # Light vehicles (under 3.5 tons, private/light commercial)
-    "a photo of a light passenger vehicle",
-    "a photo of a private car",
-    "a photo of a light truck",
-    "a photo of a motorcycle",
-    
-    # Heavy vehicles (over 3.5 tons, commercial/industrial)
-    "a photo of a heavy commercial vehicle",
-    "a photo of a large truck",
-    "a photo of a commercial bus",
-    "a photo of an articulated lorry"
+# For two-round refinement (optional future enhancement)
+CLIP_VAN_SUBCATEGORIES = [
+    "a photo of a minivan",
+    "a photo of a small commercial van",
+    "a photo of a large commercial van"
 ]
-
-# Import configuration (can be overridden by clip_config.py)
-try:
-    from clip_config import USE_BINARY_APPROACH as CONFIG_USE_BINARY
-    USE_BINARY_APPROACH = CONFIG_USE_BINARY
-except ImportError:
-    USE_BINARY_APPROACH = False  # Default: detailed approach
-
-# Active configuration
-CLIP_VEHICLE_LABELS = CLIP_VEHICLE_LABELS_BINARY if USE_BINARY_APPROACH else CLIP_VEHICLE_LABELS_DETAILED
-
-# This will print during model initialization
-APPROACH_NAME = "Binary (8 labels)" if USE_BINARY_APPROACH else "Detailed (11 labels)"
 
 # Color labels for CLIP classification
 CLIP_COLOR_LABELS = [
@@ -97,49 +66,28 @@ CLIP_COLOR_LABELS = [
 ]
 
 # Mapping from CLIP labels to standardized vehicle types for toll classification
-# Detailed approach mapping
-CLIP_TO_VEHICLE_TYPE_DETAILED = {
-    # Class 1: Light vehicles
+CLIP_TO_VEHICLE_TYPE = {
     "car": "car",
-    "pickup truck": "pickup",
+    "pickup": "pickup",
     "SUV": "suv",
-    "minivan": "light_van",
-    "motorcycle": "motorcycle",
-    
-    # Class 2: Heavy 2-axle vehicles
-    "delivery truck": "heavy_truck_2axle",
+    "van": "van",
     "bus": "bus",
-    
-    # Class 3-4: Heavy multi-axle vehicles
-    "semi truck": "semi",
-    "truck with trailer": "semi",
-    
-    # Additional
+    "semitruck": "semi",
+    "motorcycle": "motorcycle",
     "trailer": "trailer"
 }
 
-# Binary approach mapping (light vs heavy only)
-CLIP_TO_VEHICLE_TYPE_BINARY = {
-    # Light vehicles (all map to generic "light" category)
-    "light passenger vehicle": "light_vehicle",
-    "private car": "light_vehicle",
-    "light truck": "light_vehicle",
-    "motorcycle": "motorcycle",
-    
-    # Heavy vehicles (all map to generic "heavy" category)
-    "heavy commercial vehicle": "heavy_vehicle",
-    "large truck": "heavy_vehicle",
-    "commercial bus": "heavy_vehicle",
-    "articulated lorry": "heavy_vehicle"
+# Van subcategory mapping (for two-round refinement)
+CLIP_VAN_TO_TYPE = {
+    "minivan": "light_van",
+    "small commercial van": "light_van",
+    "large commercial van": "heavy_van"
 }
 
-# Active mapping
-CLIP_TO_VEHICLE_TYPE = CLIP_TO_VEHICLE_TYPE_BINARY if USE_BINARY_APPROACH else CLIP_TO_VEHICLE_TYPE_DETAILED
-
 # Vehicle type groups for South African toll classification
-LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "light_van", "motorcycle", "light_vehicle"}  # Class 1
-HEAVY_2AXLE_GROUP = {"heavy_truck_2axle", "bus"}  # Class 2 (2-axle heavy)
-HEAVY_MULTAXLE_GROUP = {"semi", "trailer", "heavy_vehicle"}  # Class 3-4 (3+ axles)
+LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "light_van", "motorcycle"}  # Class 1
+HEAVY_2AXLE_GROUP = {"van", "heavy_van", "bus"}  # Class 2 (2-axle heavy) - vans default to heavy unless refined
+HEAVY_MULTAXLE_GROUP = {"semi", "trailer"}  # Class 3-4 (3+ axles)
 
 
 # Allow required classes for PyTorch 2.6+ weights_only loading of YOLO models
@@ -387,7 +335,8 @@ class VehicleDetector:
         model_path: str = "yolo12n", 
         confidence: float = 0.25,
         clip_model_name: str = "openai/clip-vit-base-patch32",
-        use_clip: bool = True
+        use_clip: bool = True,
+        use_wheel_detection: bool = True
     ):
         """
         Initialize the vehicle detector with YOLO and CLIP.
@@ -397,14 +346,16 @@ class VehicleDetector:
             confidence: Confidence threshold for YOLO detections
             clip_model_name: CLIP model name ("openai/clip-vit-base-patch32" or "openai/clip-vit-large-patch14")
             use_clip: Whether to use CLIP for classification (if False, falls back to YOLO-based classification)
+            use_wheel_detection: Whether to use segmentation model for wheel detection
         """
         self.confidence = confidence
         self.model_path = model_path
         self.use_clip = use_clip
         self.clip_model_name = clip_model_name
+        self.use_wheel_detection = use_wheel_detection
         
         print(f"Initializing YOLO model: {model_path}")
-        print(f"📋 CLIP Approach: {APPROACH_NAME} (USE_BINARY={USE_BINARY_APPROACH})")
+        print(f"📋 CLIP Labels: {len(CLIP_VEHICLE_LABELS)} vehicle categories")
         
         # Try multiple locations for the model
         # 1. Project models directory (where download_model.py copies it)
@@ -445,6 +396,11 @@ class VehicleDetector:
         self.clip_processor = None
         if use_clip:
             self.load_clip_model(clip_model_name)
+        
+        # Initialize wheel detection segmentation model if enabled
+        self.seg_model = None
+        if use_wheel_detection:
+            self.load_wheel_detection_model()
     
     def _detect_model_type(self) -> bool:
         """Detect if model is LVIS-trained or COCO-trained."""
@@ -462,6 +418,22 @@ class VehicleDetector:
         except:
             print("⚠️  Could not detect model type, assuming COCO")
             return False
+    
+    def load_wheel_detection_model(self):
+        """
+        Load YOLO segmentation model for wheel detection.
+        Uses YOLOv11 segmentation model which has 'wheel' class.
+        """
+        print("Loading wheel detection model (YOLOv11-seg)...")
+        try:
+            # Use YOLOv11n-seg (lightweight segmentation model)
+            self.seg_model = YOLO("yolo11n-seg.pt")
+            print("✅ Wheel detection model loaded!")
+        except Exception as e:
+            print(f"⚠️  Failed to load wheel detection model: {e}")
+            print("⚠️  Will use heuristic-based axle estimation")
+            self.seg_model = None
+            self.use_wheel_detection = False
     
     def load_clip_model(self, model_name: str):
         """
@@ -564,25 +536,164 @@ class VehicleDetector:
             print(f"❌ CLIP vehicle classification failed: {e}")
             return []
     
-    def classify_vehicle_both_approaches(
+    def refine_van_classification(
         self, 
         vehicle_crop: np.ndarray, 
-        top_k: int = 5
-    ) -> Dict[str, List[Dict[str, float]]]:
+        top_k: int = 3
+    ) -> List[Dict[str, float]]:
         """
-        Run both detailed and binary classification approaches for comparison.
+        Second-round refinement for van classification to distinguish light vs heavy vans.
         
         Args:
             vehicle_crop: Cropped vehicle image
-            top_k: Number of top predictions per approach
+            top_k: Number of top predictions
         
         Returns:
-            Dict with 'detailed' and 'binary' keys, each containing classification results
+            List of van subcategory predictions
         """
-        return {
-            "detailed": self.classify_vehicle_with_clip(vehicle_crop, top_k, CLIP_VEHICLE_LABELS_DETAILED),
-            "binary": self.classify_vehicle_with_clip(vehicle_crop, top_k, CLIP_VEHICLE_LABELS_BINARY)
-        }
+        return self.classify_vehicle_with_clip(vehicle_crop, top_k, CLIP_VAN_SUBCATEGORIES)
+    
+    def detect_wheels_and_count_axles(
+        self,
+        vehicle_crop: np.ndarray,
+        vehicle_type: str = "unknown"
+    ) -> tuple[int, dict]:
+        """
+        Detect wheels using segmentation model and count axles.
+        Only counts wheels that are touching the ground.
+        
+        Args:
+            vehicle_crop: Cropped vehicle image
+            vehicle_type: Type of vehicle (for fallback estimation)
+        
+        Returns:
+            Tuple of (axle_count, debug_info)
+        """
+        if not self.use_wheel_detection or self.seg_model is None:
+            # Fallback to heuristic estimation
+            from classification.rules import estimate_axles_from_detection
+            img_height = vehicle_crop.shape[0]
+            bbox_height = vehicle_crop.shape[0]
+            bbox_width = vehicle_crop.shape[1]
+            axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+            return axles, {"method": "heuristic", "wheels_detected": 0}
+        
+        try:
+            # Run segmentation
+            results = self.seg_model(vehicle_crop, conf=0.3, verbose=False)
+            
+            if not results or len(results) == 0:
+                # No detections, use heuristic fallback
+                from classification.rules import estimate_axles_from_detection
+                img_height = vehicle_crop.shape[0]
+                bbox_height = vehicle_crop.shape[0]
+                bbox_width = vehicle_crop.shape[1]
+                axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_detected"}
+            
+            result = results[0]
+            
+            # Get class names from model
+            class_names = result.names if hasattr(result, 'names') else {}
+            
+            # Find wheel class ID (COCO has 'wheel' or might use other terms)
+            wheel_class_id = None
+            for class_id, class_name in class_names.items():
+                if 'wheel' in class_name.lower() or 'tire' in class_name.lower():
+                    wheel_class_id = class_id
+                    break
+            
+            if wheel_class_id is None or not hasattr(result, 'boxes') or result.boxes is None:
+                # No wheel class found or no boxes, use heuristic
+                from classification.rules import estimate_axles_from_detection
+                img_height = vehicle_crop.shape[0]
+                bbox_height = vehicle_crop.shape[0]
+                bbox_width = vehicle_crop.shape[1]
+                axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheel_class"}
+            
+            # Extract wheel detections
+            boxes = result.boxes
+            wheel_boxes = []
+            
+            for i, box in enumerate(boxes):
+                class_id = int(box.cls[0])
+                if class_id == wheel_class_id:
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    confidence = float(box.conf[0])
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    wheel_boxes.append({
+                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                        'center_x': center_x, 'center_y': center_y,
+                        'confidence': confidence
+                    })
+            
+            if len(wheel_boxes) == 0:
+                # No wheels detected, use heuristic
+                from classification.rules import estimate_axles_from_detection
+                img_height = vehicle_crop.shape[0]
+                bbox_height = vehicle_crop.shape[0]
+                bbox_width = vehicle_crop.shape[1]
+                axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}
+            
+            # Filter wheels touching the ground
+            # Ground is defined as bottom 15% of the image
+            img_height = vehicle_crop.shape[0]
+            ground_threshold = img_height * 0.85  # Wheels with center_y >= this are on ground
+            
+            wheels_on_ground = [
+                w for w in wheel_boxes 
+                if w['center_y'] >= ground_threshold
+            ]
+            
+            # If no wheels on ground detected, be more lenient (bottom 25%)
+            if len(wheels_on_ground) == 0:
+                ground_threshold = img_height * 0.75
+                wheels_on_ground = [
+                    w for w in wheel_boxes 
+                    if w['center_y'] >= ground_threshold
+                ]
+            
+            # Count axles (2 wheels per axle, but account for occlusion)
+            wheels_count = len(wheels_on_ground)
+            
+            if wheels_count == 0:
+                # No wheels on ground, use all detected wheels
+                wheels_count = len(wheel_boxes)
+            
+            # Estimate axles
+            if wheels_count <= 2:
+                axle_count = max(2, wheels_count)  # Minimum 2 axles for any vehicle
+            else:
+                # Each axle has 2 wheels, but we might only see some due to occlusion
+                # Round up to account for hidden wheels
+                axle_count = (wheels_count + 1) // 2
+            
+            # Cap at reasonable maximum
+            axle_count = min(axle_count, 6)
+            
+            debug_info = {
+                "method": "wheel_detection",
+                "total_wheels_detected": len(wheel_boxes),
+                "wheels_on_ground": len(wheels_on_ground),
+                "axle_count": axle_count,
+                "ground_threshold": ground_threshold,
+                "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheels_on_ground[:6]]  # First 6 for debugging
+            }
+            
+            return axle_count, debug_info
+            
+        except Exception as e:
+            print(f"❌ Wheel detection failed: {e}")
+            # Fallback to heuristic
+            from classification.rules import estimate_axles_from_detection
+            img_height = vehicle_crop.shape[0]
+            bbox_height = vehicle_crop.shape[0]
+            bbox_width = vehicle_crop.shape[1]
+            axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+            return axles, {"method": "heuristic_fallback", "reason": f"exception: {str(e)}"}
     
     def classify_color_with_clip(
         self, 
@@ -825,65 +936,56 @@ class VehicleDetector:
             # Stage 2: CLIP Classification (if enabled)
             vehicle_type = None
             clip_vehicle_results = []
-            clip_vehicle_results_detailed = []
-            clip_vehicle_results_binary = []
+            clip_van_refinement = []
             clip_color_results = []
-            decision_reason = "YOLO-based classification (CLIP disabled)"
+            decision_reason = "YOLO only used for detection"
             clip_inference_time = 0.0
             
             if self.use_clip and vehicle_crop is not None:
                 clip_start = time.time()
                 
-                # Run BOTH classification approaches for comparison
-                both_results = self.classify_vehicle_both_approaches(vehicle_crop, top_k=5)
-                clip_vehicle_results_detailed = both_results["detailed"]
-                clip_vehicle_results_binary = both_results["binary"]
-                
-                print(f"   📊 Detailed results: {len(clip_vehicle_results_detailed)} items")
-                print(f"   📊 Binary results: {len(clip_vehicle_results_binary)} items")
-                
-                # Use the active approach for actual classification
-                clip_vehicle_results = clip_vehicle_results_binary if USE_BINARY_APPROACH else clip_vehicle_results_detailed
+                # Primary CLIP classification - simple, clear categories
+                clip_vehicle_results = self.classify_vehicle_with_clip(vehicle_crop, top_k=5)
                 
                 # Classify color with CLIP
                 clip_color_results = self.classify_color_with_clip(vehicle_crop, top_k=3)
                 
-                clip_inference_time = (time.time() - clip_start) * 1000  # milliseconds
-                
                 if clip_vehicle_results:
-                    # Resolve ambiguous classifications
+                    # Get initial vehicle type
                     vehicle_type, decision_reason = self.resolve_ambiguous_classification(
                         clip_vehicle_results,
                         bbox_height,
                         bbox_width,
                         image_height
                     )
-                    approach = "Binary" if USE_BINARY_APPROACH else "Detailed"
-                    print(f"   CLIP ({approach}): {vehicle_type} | {decision_reason}")
+                    
+                    # Optional: Refine van classification (minivan vs small commercial vs large commercial)
+                    if vehicle_type == "van" and clip_vehicle_results[0]["confidence"] > 0.3:
+                        clip_van_refinement = self.refine_van_classification(vehicle_crop, top_k=3)
+                        if clip_van_refinement and clip_van_refinement[0]["confidence"] > 0.5:
+                            refined_type = CLIP_VAN_TO_TYPE.get(clip_van_refinement[0]["label"], "van")
+                            if refined_type != "van":
+                                vehicle_type = refined_type
+                                decision_reason += f" | Refined: {clip_van_refinement[0]['label']} ({clip_van_refinement[0]['confidence']:.3f})"
+                    
+                    clip_inference_time = (time.time() - clip_start) * 1000  # milliseconds
+                    print(f"   CLIP: {vehicle_type} | {decision_reason}")
                     print(f"   CLIP Inference: {clip_inference_time:.1f}ms")
                 else:
-                    # Fallback to YOLO-based classification
-                    if self.is_lvis_model:
-                        vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
-                    else:
-                        vehicle_type = self._map_yolo_to_refined(yolo_class)
-                    decision_reason = "CLIP failed, using YOLO classification"
-                    print(f"   ⚠️  {decision_reason}: {vehicle_type}")
+                    clip_inference_time = (time.time() - clip_start) * 1000
+                    vehicle_type = "unknown"
+                    decision_reason = "CLIP failed to classify"
+                    print(f"   ⚠️  {decision_reason}")
             else:
-                # Fallback to YOLO-based classification
-                if self.is_lvis_model:
-                    vehicle_type = self.LVIS_VEHICLE_CLASSES[class_id]
-                else:
-                    vehicle_type = self._map_yolo_to_refined(yolo_class)
-                print(f"   YOLO: {vehicle_type}")
+                vehicle_type = "unknown"
+                print(f"   ⚠️ CLIP disabled")
             
-            # Estimate axles from bounding box heuristics
-            estimated_axles = estimate_axles_from_detection(
-                vehicle_type,
-                bbox_height,
-                bbox_width,
-                image_height
+            # Count axles using wheel detection (with heuristic fallback)
+            estimated_axles, axle_debug = self.detect_wheels_and_count_axles(
+                vehicle_crop,
+                vehicle_type
             )
+            print(f"   🎡 Axles: {estimated_axles} ({axle_debug.get('method', 'unknown')})")
             
             # Determine toll class with refined vehicle type
             predicted_class = toll_class(
@@ -902,7 +1004,7 @@ class VehicleDetector:
             # Build detection result
             detection = {
                 "vehicle_type": vehicle_type,
-                "yolo_class": yolo_class,  # Keep original for debugging
+                "yolo_class": yolo_class,  # YOLO detection (for debugging only, not used for classification)
                 "confidence": yolo_confidence,  # YOLO bbox confidence
                 "bbox": {
                     "x1": x1,
@@ -915,25 +1017,23 @@ class VehicleDetector:
                 "axle_count": estimated_axles,
                 "predicted_class": predicted_class,
                 "primary_color": primary_color,
-                "clip_vehicle_results": clip_vehicle_results,  # Active approach
-                "clip_vehicle_results_detailed": clip_vehicle_results_detailed,  # Detailed (11 labels)
-                "clip_vehicle_results_binary": clip_vehicle_results_binary,  # Binary (8 labels)
+                "clip_vehicle_results": clip_vehicle_results,
+                "clip_van_refinement": clip_van_refinement if clip_van_refinement else None,
                 "clip_color_results": clip_color_results,
                 "clip_inference_time_ms": clip_inference_time,
                 "clip_model": self.clip_model_name if self.use_clip else None,
-                "clip_approach": "binary" if USE_BINARY_APPROACH else "detailed",
+                "axle_detection": axle_debug,
                 "debug": {
-                    "model_type": "LVIS" if self.is_lvis_model else "COCO",
+                    "model_type": "Detection only" if self.use_clip else ("LVIS" if self.is_lvis_model else "COCO"),
                     "class_id": class_id,
                     "yolo_class": yolo_class,
                     "yolo_confidence": yolo_confidence,
                     "crop_size": vehicle_crop.shape if vehicle_crop is not None else None,
                     "decision": decision_reason,
-                    "clip_enabled": self.use_clip
+                    "clip_enabled": self.use_clip,
+                    "wheel_detection_enabled": self.use_wheel_detection
                 }
             }
-            
-            print(f"   ✅ Response has detailed: {len(clip_vehicle_results_detailed)}, binary: {len(clip_vehicle_results_binary)}")
             
             detections.append(detection)
         

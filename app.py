@@ -351,7 +351,7 @@ async def classify_image(file: UploadFile = File(...)):
         return {
             "id": classification_id,
             "vehicle_type": result["vehicle_type"],
-            "yolo_class": result.get("yolo_class", "unknown"),  # Add YOLO detection for debugging
+            "yolo_class": result.get("yolo_class", "unknown"),  # YOLO detection (for debugging only)
             "axle_count": result["axle_count"],
             "predicted_class": result["predicted_class"],
             "confidence": result["confidence"],
@@ -361,13 +361,12 @@ async def classify_image(file: UploadFile = File(...)):
             "bbox": result["bbox"],
             "primary_color": result.get("primary_color"),
             "clip_vehicle_results": result.get("clip_vehicle_results", []),
-            "clip_vehicle_results_detailed": result.get("clip_vehicle_results_detailed", []),
-            "clip_vehicle_results_binary": result.get("clip_vehicle_results_binary", []),
+            "clip_van_refinement": result.get("clip_van_refinement"),
             "clip_color_results": result.get("clip_color_results", []),
             "clip_inference_time_ms": result.get("clip_inference_time_ms", 0.0),
             "clip_model": result.get("clip_model"),
-            "clip_approach": result.get("clip_approach", "detailed"),
-            "debug": result.get("debug", {})  # Include debug information
+            "axle_detection": result.get("axle_detection", {}),
+            "debug": result.get("debug", {})
         }
         
     except Exception as e:

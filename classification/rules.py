@@ -15,10 +15,10 @@ from typing import Optional
 import numpy as np
 import cv2
 
-# Vehicle type categories (includes CLIP types) - South African toll classification
-LIGHT_TYPES = {"car", "pickup", "bakkie", "suv", "light_van", "motorcycle", "light_vehicle"}  # Class 1
-HEAVY_2AXLE_TYPES = {"heavy_truck_2axle", "bus"}  # Class 2 (2-axle heavy)
-HEAVY_MULTAXLE_TYPES = {"semi", "truck", "lorry", "tractor", "heavy_vehicle"}  # Class 3-4 (3+ axles)
+# Vehicle type categories (CLIP types) - South African toll classification
+LIGHT_TYPES = {"car", "pickup", "suv", "light_van", "motorcycle"}  # Class 1
+HEAVY_2AXLE_TYPES = {"van", "heavy_van", "bus"}  # Class 2 (2-axle heavy) - vans default to heavy unless refined
+HEAVY_MULTAXLE_TYPES = {"semi", "semitruck", "trailer"}  # Class 3-4 (3+ axles)
 
 # Thresholds for visual feature analysis
 BOXINESS_THRESHOLD = 0.18        # Edge density in rectangular regions (higher = stricter)

@@ -14,17 +14,18 @@ Edit the values below and restart the backend to test different configurations.
 # - "openai/clip-vit-base-patch32"   → Faster, less memory (~350MB), good accuracy
 # - "openai/clip-vit-large-patch14"  → Slower, more memory (~890MB), better accuracy
 
-CLIP_MODEL = "openai/clip-vit-base-patch32"
-# CLIP_MODEL = "openai/clip-vit-large-patch14"  # Uncomment to test large model
+# CLIP_MODEL = "openai/clip-vit-base-patch32"
+CLIP_MODEL = "openai/clip-vit-large-patch14"  # Testing large model
 
 # ============================================================================
-# CLASSIFICATION APPROACH
+# CLASSIFICATION LABELS
 # ============================================================================
-# Choose which classification approach to use:
-# - False → Detailed approach (11 specific labels: car, pickup, SUV, minivan, etc.)
-# - True  → Binary approach (8 labels: light vs heavy with subcategories)
-
-USE_BINARY_APPROACH = False  # Set to True to test binary approach
+# Simplified to 8 clear categories based on the original list:
+# - car, pickup, SUV, van, bus, semitruck, motorcycle, trailer
+#
+# Van refinement (optional second-round):
+# - If CLIP identifies "van", system can refine to: minivan, small commercial van, large commercial van
+# - This helps distinguish Class 1 (light van/minivan) from Class 2 (heavy commercial van)
 
 # ============================================================================
 # MODEL DETAILS
