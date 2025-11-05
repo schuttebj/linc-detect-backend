@@ -71,13 +71,14 @@ CLIP_VEHICLE_LABELS_BINARY = [
 try:
     from clip_config import USE_BINARY_APPROACH as CONFIG_USE_BINARY
     USE_BINARY_APPROACH = CONFIG_USE_BINARY
-    print(f"📋 Using CLIP config: {'Binary' if USE_BINARY_APPROACH else 'Detailed'} approach")
 except ImportError:
     USE_BINARY_APPROACH = False  # Default: detailed approach
-    print("📋 Using default: Detailed approach (clip_config.py not found)")
 
 # Active configuration
 CLIP_VEHICLE_LABELS = CLIP_VEHICLE_LABELS_BINARY if USE_BINARY_APPROACH else CLIP_VEHICLE_LABELS_DETAILED
+
+# This will print during model initialization
+APPROACH_NAME = "Binary (8 labels)" if USE_BINARY_APPROACH else "Detailed (11 labels)"
 
 # Color labels for CLIP classification
 CLIP_COLOR_LABELS = [
@@ -403,6 +404,7 @@ class VehicleDetector:
         self.clip_model_name = clip_model_name
         
         print(f"Initializing YOLO model: {model_path}")
+        print(f"📋 CLIP Approach: {APPROACH_NAME} (USE_BINARY={USE_BINARY_APPROACH})")
         
         # Try multiple locations for the model
         # 1. Project models directory (where download_model.py copies it)
@@ -837,6 +839,9 @@ class VehicleDetector:
                 clip_vehicle_results_detailed = both_results["detailed"]
                 clip_vehicle_results_binary = both_results["binary"]
                 
+                print(f"   📊 Detailed results: {len(clip_vehicle_results_detailed)} items")
+                print(f"   📊 Binary results: {len(clip_vehicle_results_binary)} items")
+                
                 # Use the active approach for actual classification
                 clip_vehicle_results = clip_vehicle_results_binary if USE_BINARY_APPROACH else clip_vehicle_results_detailed
                 
@@ -927,6 +932,8 @@ class VehicleDetector:
                     "clip_enabled": self.use_clip
                 }
             }
+            
+            print(f"   ✅ Response has detailed: {len(clip_vehicle_results_detailed)}, binary: {len(clip_vehicle_results_binary)}")
             
             detections.append(detection)
         
