@@ -486,7 +486,8 @@ class VehicleDetector:
     def classify_vehicle_with_clip(
         self, 
         vehicle_crop: np.ndarray, 
-        top_k: int = 5
+        top_k: int = 5,
+        labels: List[str] = None
     ) -> List[Dict[str, float]]:
         """
         Classify vehicle type using CLIP model.
@@ -494,12 +495,16 @@ class VehicleDetector:
         Args:
             vehicle_crop: Cropped vehicle image (numpy array, BGR format)
             top_k: Number of top predictions to return
+            labels: Optional custom label list (defaults to CLIP_VEHICLE_LABELS)
         
         Returns:
             List of dicts with 'label' and 'confidence' keys, sorted by confidence
         """
         if self.clip_model is None or self.clip_processor is None:
             return []
+        
+        if labels is None:
+            labels = CLIP_VEHICLE_LABELS
         
         try:
             # Convert BGR to RGB
@@ -513,7 +518,7 @@ class VehicleDetector:
             
             # Process with CLIP
             inputs = self.clip_processor(
-                text=CLIP_VEHICLE_LABELS, 
+                text=labels, 
                 images=pil_image, 
                 return_tensors="pt", 
                 padding=True
@@ -536,7 +541,7 @@ class VehicleDetector:
             
             results = []
             for idx in sorted_indices:
-                label = CLIP_VEHICLE_LABELS[idx].replace("a photo of a ", "").replace("a photo of an ", "")
+                label = labels[idx].replace("a photo of a ", "").replace("a photo of an ", "")
                 confidence = probs[idx].item()
                 results.append({
                     "label": label,
@@ -548,6 +553,26 @@ class VehicleDetector:
         except Exception as e:
             print(f"❌ CLIP vehicle classification failed: {e}")
             return []
+    
+    def classify_vehicle_both_approaches(
+        self, 
+        vehicle_crop: np.ndarray, 
+        top_k: int = 5
+    ) -> Dict[str, List[Dict[str, float]]]:
+        """
+        Run both detailed and binary classification approaches for comparison.
+        
+        Args:
+            vehicle_crop: Cropped vehicle image
+            top_k: Number of top predictions per approach
+        
+        Returns:
+            Dict with 'detailed' and 'binary' keys, each containing classification results
+        """
+        return {
+            "detailed": self.classify_vehicle_with_clip(vehicle_crop, top_k, CLIP_VEHICLE_LABELS_DETAILED),
+            "binary": self.classify_vehicle_with_clip(vehicle_crop, top_k, CLIP_VEHICLE_LABELS_BINARY)
+        }
     
     def classify_color_with_clip(
         self, 
@@ -790,6 +815,8 @@ class VehicleDetector:
             # Stage 2: CLIP Classification (if enabled)
             vehicle_type = None
             clip_vehicle_results = []
+            clip_vehicle_results_detailed = []
+            clip_vehicle_results_binary = []
             clip_color_results = []
             decision_reason = "YOLO-based classification (CLIP disabled)"
             clip_inference_time = 0.0
@@ -797,8 +824,13 @@ class VehicleDetector:
             if self.use_clip and vehicle_crop is not None:
                 clip_start = time.time()
                 
-                # Classify vehicle type with CLIP
-                clip_vehicle_results = self.classify_vehicle_with_clip(vehicle_crop, top_k=5)
+                # Run BOTH classification approaches for comparison
+                both_results = self.classify_vehicle_both_approaches(vehicle_crop, top_k=5)
+                clip_vehicle_results_detailed = both_results["detailed"]
+                clip_vehicle_results_binary = both_results["binary"]
+                
+                # Use the active approach for actual classification
+                clip_vehicle_results = clip_vehicle_results_binary if USE_BINARY_APPROACH else clip_vehicle_results_detailed
                 
                 # Classify color with CLIP
                 clip_color_results = self.classify_color_with_clip(vehicle_crop, top_k=3)
@@ -813,7 +845,8 @@ class VehicleDetector:
                         bbox_width,
                         image_height
                     )
-                    print(f"   CLIP: {vehicle_type} | {decision_reason}")
+                    approach = "Binary" if USE_BINARY_APPROACH else "Detailed"
+                    print(f"   CLIP ({approach}): {vehicle_type} | {decision_reason}")
                     print(f"   CLIP Inference: {clip_inference_time:.1f}ms")
                 else:
                     # Fallback to YOLO-based classification
@@ -869,10 +902,13 @@ class VehicleDetector:
                 "axle_count": estimated_axles,
                 "predicted_class": predicted_class,
                 "primary_color": primary_color,
-                "clip_vehicle_results": clip_vehicle_results,
+                "clip_vehicle_results": clip_vehicle_results,  # Active approach
+                "clip_vehicle_results_detailed": clip_vehicle_results_detailed,  # Detailed (11 labels)
+                "clip_vehicle_results_binary": clip_vehicle_results_binary,  # Binary (8 labels)
                 "clip_color_results": clip_color_results,
                 "clip_inference_time_ms": clip_inference_time,
                 "clip_model": self.clip_model_name if self.use_clip else None,
+                "clip_approach": "binary" if USE_BINARY_APPROACH else "detailed",
                 "debug": {
                     "model_type": "LVIS" if self.is_lvis_model else "COCO",
                     "class_id": class_id,
