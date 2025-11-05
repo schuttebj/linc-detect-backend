@@ -30,18 +30,44 @@ except ImportError:
 # ============================================================================
 
 # Vehicle type labels for CLIP classification
+# Optimized for South African toll classification
 CLIP_VEHICLE_LABELS = [
-    "a photo of a car",
-    "a photo of a semitruck",
-    "a photo of a bus",
-    "a photo of a van",
+    # Class 1: Light vehicles (passenger vehicles, light delivery)
+    "a photo of a passenger car",
+    "a photo of a sedan",
+    "a photo of a hatchback",
     "a photo of a pickup truck",
-    "a photo of a jeep",
+    "a photo of a bakkie",  # South African term for pickup
     "a photo of an SUV",
+    "a photo of a 4x4 vehicle",
+    "a photo of a jeep",
+    "a photo of a minibus taxi",
+    "a photo of a light delivery van",
+    "a photo of a panel van",
     "a photo of a motorcycle",
-    "a photo of a bicycle",
-    "a photo of a train",
-    "a photo of a trailer"
+    "a photo of a motorbike",
+    
+    # Class 2: Heavy 2-axle vehicles
+    "a photo of a large delivery truck",
+    "a photo of a box truck",
+    "a photo of a medium duty truck",
+    "a photo of a refuse truck",
+    "a photo of a fire truck",
+    "a photo of a tour bus",
+    "a photo of a coach bus",
+    "a photo of a city bus",
+    
+    # Class 3-4: Heavy multi-axle vehicles
+    "a photo of an articulated truck",
+    "a photo of a semi-trailer truck",
+    "a photo of an 18-wheeler truck",
+    "a photo of a heavy goods vehicle",
+    "a photo of a long haul truck",
+    "a photo of a truck with trailer",
+    
+    # Additional
+    "a photo of a trailer",
+    "a photo of a caravan"
 ]
 
 # Color labels for CLIP classification
@@ -60,25 +86,50 @@ CLIP_COLOR_LABELS = [
     "a purple vehicle"
 ]
 
-# Mapping from CLIP labels to standardized vehicle types
+# Mapping from CLIP labels to standardized vehicle types for toll classification
 CLIP_TO_VEHICLE_TYPE = {
-    "car": "car",
-    "semitruck": "semi",
-    "bus": "bus",
-    "van": "van",
+    # Class 1: Light vehicles
+    "passenger car": "car",
+    "sedan": "car",
+    "hatchback": "car",
     "pickup truck": "pickup",
-    "jeep": "suv",  # Treat jeep as SUV for toll purposes
+    "bakkie": "pickup",
     "SUV": "suv",
+    "4x4 vehicle": "suv",
+    "jeep": "suv",
+    "minibus taxi": "light_van",  # Minibus taxi is Class 1 in SA
+    "light delivery van": "light_van",
+    "panel van": "light_van",
     "motorcycle": "motorcycle",
-    "bicycle": "motorcycle",  # Treat bicycle as motorcycle for Class 1
-    "train": "semi",  # Rare misclassification, treat as semi
-    "trailer": "trailer"
+    "motorbike": "motorcycle",
+    
+    # Class 2: Heavy 2-axle vehicles
+    "large delivery truck": "heavy_truck_2axle",
+    "box truck": "heavy_truck_2axle",
+    "medium duty truck": "heavy_truck_2axle",
+    "refuse truck": "heavy_truck_2axle",
+    "fire truck": "heavy_truck_2axle",
+    "tour bus": "bus",
+    "coach bus": "bus",
+    "city bus": "bus",
+    
+    # Class 3-4: Heavy multi-axle vehicles
+    "articulated truck": "semi",
+    "semi-trailer truck": "semi",
+    "18-wheeler truck": "semi",
+    "heavy goods vehicle": "semi",
+    "long haul truck": "semi",
+    "truck with trailer": "semi",
+    
+    # Additional
+    "trailer": "trailer",
+    "caravan": "trailer"
 }
 
-# Vehicle type groups for handling similar classifications
-LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "jeep"}
-HEAVY_VEHICLE_GROUP = {"semi", "semitruck", "trailer"}
-COMMERCIAL_VEHICLE_GROUP = {"van", "bus"}
+# Vehicle type groups for South African toll classification
+LIGHT_VEHICLE_GROUP = {"car", "pickup", "suv", "light_van", "motorcycle"}  # Class 1
+HEAVY_2AXLE_GROUP = {"heavy_truck_2axle", "bus"}  # Class 2 (2-axle heavy)
+HEAVY_MULTAXLE_GROUP = {"semi", "trailer"}  # Class 3-4 (3+ axles)
 
 
 # Allow required classes for PyTorch 2.6+ weights_only loading of YOLO models
@@ -614,35 +665,44 @@ class VehicleDetector:
         type1 = CLIP_TO_VEHICLE_TYPE.get(label1, label1)
         type2 = CLIP_TO_VEHICLE_TYPE.get(label2, label2)
         
-        # Both in light vehicle group (car, pickup, SUV, jeep)
+        # Both in light vehicle group (Class 1)
         if type1 in LIGHT_VEHICLE_GROUP and type2 in LIGHT_VEHICLE_GROUP:
-            # Use aspect ratio as tiebreaker
+            # Use aspect ratio as tiebreaker for pickups vs cars/SUVs
             aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
             
-            # Long/wide vehicles (pickup trucks tend to be longer)
+            # Long/wide vehicles (bakkies/pickups tend to be longer)
             if aspect_ratio > 2.2 and "pickup" in [type1, type2]:
-                return "pickup", f"Aspect ratio tiebreaker: {aspect_ratio:.2f} suggests pickup"
+                return "pickup", f"Aspect ratio tiebreaker: {aspect_ratio:.2f} suggests bakkie/pickup"
             
             # Use higher confidence (they're all Class 1 anyway)
             vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
-            return vehicle_type, f"Light vehicle group, using top: {label1} ({conf1:.3f})"
+            return vehicle_type, f"Light vehicle group (Class 1), using top: {label1} ({conf1:.3f})"
         
-        # Contradicting classes (e.g., pickup vs semi) - this is suspicious
-        if (type1 in LIGHT_VEHICLE_GROUP and type2 in HEAVY_VEHICLE_GROUP) or \
-           (type1 in HEAVY_VEHICLE_GROUP and type2 in LIGHT_VEHICLE_GROUP):
+        # Both in heavy 2-axle group (Class 2)
+        if type1 in HEAVY_2AXLE_GROUP and type2 in HEAVY_2AXLE_GROUP:
+            vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "bus")
+            return vehicle_type, f"Heavy 2-axle (Class 2), using top: {label1} ({conf1:.3f})"
+        
+        # Contradicting classes (light vs heavy) - critical distinction!
+        if (type1 in LIGHT_VEHICLE_GROUP and (type2 in HEAVY_2AXLE_GROUP or type2 in HEAVY_MULTAXLE_GROUP)) or \
+           ((type1 in HEAVY_2AXLE_GROUP or type1 in HEAVY_MULTAXLE_GROUP) and type2 in LIGHT_VEHICLE_GROUP):
             
             # Use relative size to help decide
             relative_size = bbox_height / image_height if image_height > 0 else 0
+            aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
             
             # Large object in frame suggests heavy vehicle
-            if relative_size > 0.6 and conf_gap < 0.10:
+            if relative_size > 0.5 and conf_gap < 0.15:
                 # If heavy vehicle is in top 2 and object is large, prefer heavy
-                heavy_type = type1 if type1 in HEAVY_VEHICLE_GROUP else type2
-                return heavy_type, f"Large object ({relative_size:.2f}) suggests heavy vehicle"
+                if type1 in HEAVY_2AXLE_GROUP or type1 in HEAVY_MULTAXLE_GROUP:
+                    heavy_type = type1
+                else:
+                    heavy_type = type2
+                return heavy_type, f"Large object ({relative_size:.2f}) + aspect {aspect_ratio:.2f} suggests heavy vehicle"
             
             # Otherwise, trust CLIP's top pick
             vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
-            return vehicle_type, f"Contradicting classes, trusting top: {label1} ({conf1:.3f})"
+            return vehicle_type, f"Light vs Heavy conflict, trusting CLIP top: {label1} ({conf1:.3f})"
         
         # Default: use top result
         vehicle_type = CLIP_TO_VEHICLE_TYPE.get(label1, "car")
@@ -858,7 +918,15 @@ class VehicleDetector:
             Tuple of (classification_result, annotated_image)
         """
         # Load image
-        image = np.array(Image.open(image_path))
+        pil_image = Image.open(image_path)
+        
+        # Convert RGBA to RGB if needed (handle transparency)
+        if pil_image.mode == 'RGBA':
+            pil_image = pil_image.convert('RGB')
+        elif pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+        
+        image = np.array(pil_image)
         
         # Convert RGB to BGR for OpenCV compatibility
         if len(image.shape) == 3 and image.shape[2] == 3:
