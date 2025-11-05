@@ -421,14 +421,24 @@ class VehicleDetector:
     
     def load_wheel_detection_model(self):
         """
-        Load YOLO segmentation model for wheel detection.
-        Uses YOLOv11 segmentation model which has 'wheel' class.
+        Load YOLO detection model for wheel detection.
+        Uses YOLOv8 trained on Open Images V7 dataset (600 classes including wheels).
         """
-        print("Loading wheel detection model (YOLOv11-seg)...")
+        print("Loading wheel detection model (YOLOv8n-OIv7)...")
         try:
-            # Use YOLOv11n-seg (lightweight segmentation model)
-            self.seg_model = YOLO("yolo11n-seg.pt")
-            print("✅ Wheel detection model loaded!")
+            # Use YOLOv8n trained on Open Images V7 (has wheel/tire class)
+            self.seg_model = YOLO("yolov8n-oiv7.pt")
+            
+            # Check if model has wheel/tire class
+            if hasattr(self.seg_model, 'names'):
+                class_names = self.seg_model.names
+                wheel_classes = [name for name in class_names.values() if 'wheel' in name.lower() or 'tire' in name.lower()]
+                if wheel_classes:
+                    print(f"✅ Wheel detection model loaded! Found classes: {wheel_classes}")
+                else:
+                    print(f"⚠️  Model loaded but no wheel class found. Available: {list(class_names.values())[:20]}")
+            else:
+                print("✅ Wheel detection model loaded!")
         except Exception as e:
             print(f"⚠️  Failed to load wheel detection model: {e}")
             print("⚠️  Will use heuristic-based axle estimation")
@@ -557,7 +567,7 @@ class VehicleDetector:
         self,
         vehicle_crop: np.ndarray,
         vehicle_type: str = "unknown"
-    ) -> tuple[int, dict]:
+    ) -> tuple[int, dict, list]:
         """
         Detect wheels using segmentation model and count axles.
         Only counts wheels that are touching the ground.
@@ -567,29 +577,31 @@ class VehicleDetector:
             vehicle_type: Type of vehicle (for fallback estimation)
         
         Returns:
-            Tuple of (axle_count, debug_info)
+            Tuple of (axle_count, debug_info, wheel_boxes)
         """
         if not self.use_wheel_detection or self.seg_model is None:
             # Fallback to heuristic estimation
+            print(f"   ⚠️  Wheel detection disabled: use_wheel={self.use_wheel_detection}, model={self.seg_model is not None}")
             from classification.rules import estimate_axles_from_detection
             img_height = vehicle_crop.shape[0]
             bbox_height = vehicle_crop.shape[0]
             bbox_width = vehicle_crop.shape[1]
             axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-            return axles, {"method": "heuristic", "wheels_detected": 0}
+            return axles, {"method": "heuristic", "wheels_detected": 0, "reason": "model_not_loaded"}, []
         
         try:
-            # Run segmentation
-            results = self.seg_model(vehicle_crop, conf=0.3, verbose=False)
+            # Run detection (Open Images V7 model uses detection, not segmentation)
+            results = self.seg_model(vehicle_crop, conf=0.25, verbose=False)
             
             if not results or len(results) == 0:
                 # No detections, use heuristic fallback
+                print(f"   ⚠️  Wheel detection returned no results")
                 from classification.rules import estimate_axles_from_detection
                 img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
                 bbox_width = vehicle_crop.shape[1]
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_detected"}
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_detected"}, []
             
             result = results[0]
             
@@ -605,12 +617,13 @@ class VehicleDetector:
             
             if wheel_class_id is None or not hasattr(result, 'boxes') or result.boxes is None:
                 # No wheel class found or no boxes, use heuristic
+                print(f"   ⚠️  No wheel class found. Classes: {list(class_names.values())}")
                 from classification.rules import estimate_axles_from_detection
                 img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
                 bbox_width = vehicle_crop.shape[1]
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-                return axles, {"method": "heuristic_fallback", "reason": "no_wheel_class"}
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheel_class", "available_classes": list(class_names.values())[:10]}, []
             
             # Extract wheel detections
             boxes = result.boxes
@@ -631,12 +644,13 @@ class VehicleDetector:
             
             if len(wheel_boxes) == 0:
                 # No wheels detected, use heuristic
+                print(f"   ⚠️  No wheels found (total detections: {len(boxes)})")
                 from classification.rules import estimate_axles_from_detection
                 img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
                 bbox_width = vehicle_crop.shape[1]
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}, []
             
             # Filter wheels touching the ground
             # Ground is defined as bottom 15% of the image
@@ -683,17 +697,20 @@ class VehicleDetector:
                 "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheels_on_ground[:6]]  # First 6 for debugging
             }
             
-            return axle_count, debug_info
+            print(f"   ✅ Detected {len(wheel_boxes)} wheels, {len(wheels_on_ground)} on ground → {axle_count} axles")
+            return axle_count, debug_info, wheels_on_ground
             
         except Exception as e:
             print(f"❌ Wheel detection failed: {e}")
+            import traceback
+            traceback.print_exc()
             # Fallback to heuristic
             from classification.rules import estimate_axles_from_detection
             img_height = vehicle_crop.shape[0]
             bbox_height = vehicle_crop.shape[0]
             bbox_width = vehicle_crop.shape[1]
             axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-            return axles, {"method": "heuristic_fallback", "reason": f"exception: {str(e)}"}
+            return axles, {"method": "heuristic_fallback", "reason": f"exception: {str(e)}"}, []
     
     def classify_color_with_clip(
         self, 
@@ -981,11 +998,27 @@ class VehicleDetector:
                 print(f"   ⚠️ CLIP disabled")
             
             # Count axles using wheel detection (with heuristic fallback)
-            estimated_axles, axle_debug = self.detect_wheels_and_count_axles(
+            estimated_axles, axle_debug, wheel_boxes = self.detect_wheels_and_count_axles(
                 vehicle_crop,
                 vehicle_type
             )
-            print(f"   🎡 Axles: {estimated_axles} ({axle_debug.get('method', 'unknown')})")
+            
+            # Draw wheels on annotated image (if detected)
+            if wheel_boxes and len(wheel_boxes) > 0:
+                for wheel in wheel_boxes:
+                    # Convert crop coordinates to full image coordinates
+                    wheel_x1 = int(x1 + wheel['x1'])
+                    wheel_y1 = int(y1 + wheel['y1'])
+                    wheel_x2 = int(x1 + wheel['x2'])
+                    wheel_y2 = int(y1 + wheel['y2'])
+                    
+                    # Draw wheel bounding box
+                    cv2.rectangle(annotated_image, (wheel_x1, wheel_y1), (wheel_x2, wheel_y2), (0, 255, 255), 2)  # Yellow for wheels
+                    
+                    # Draw center point
+                    center_x = int(x1 + wheel['center_x'])
+                    center_y = int(y1 + wheel['center_y'])
+                    cv2.circle(annotated_image, (center_x, center_y), 3, (0, 255, 255), -1)
             
             # Determine toll class with refined vehicle type
             predicted_class = toll_class(
