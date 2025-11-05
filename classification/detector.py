@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import numpy as np
+import cv2
 import torch
 import torch.nn as nn
 from ultralytics import YOLO
