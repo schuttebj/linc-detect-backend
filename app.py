@@ -93,16 +93,25 @@ async def lifespan(app: FastAPI):
     else:
         print("✅ YOLO model loaded successfully (CLIP disabled)")
     
-    # Initialize database
-    db = await get_database()
-    print("✅ Database connected!")
+    # Initialize database (optional for testing)
+    try:
+        db = await get_database()
+        print("✅ Database connected!")
+    except ValueError as e:
+        print(f"⚠️  Database not configured: {e}")
+        print("⚠️  Running without database - some features may be limited")
+        # Continue without database for testing
     
     yield
     
     # Shutdown
     print("👋 Shutting down...")
-    if db:
-        await db.disconnect()
+    try:
+        db = await get_database()
+        if db:
+            await db.disconnect()
+    except:
+        pass  # Database wasn't connected
 
 
 # Create FastAPI app
