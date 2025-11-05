@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     yolo_confidence: float = 0.25
     upload_dir: str = "./uploads"
     max_upload_size: int = 10485760  # 10MB
+    enable_clip: bool = True  # Set to False for low-memory environments
+    clip_model: str = "openai/clip-vit-base-patch32"
     
     class Config:
         env_file = ".env"
@@ -47,8 +49,10 @@ settings = Settings()
 
 
 # Create uploads directory
+# Use /tmp for Railway/cloud deployments (ephemeral storage)
 UPLOAD_DIR = Path(settings.upload_dir)
 UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+print(f"📁 Upload directory: {UPLOAD_DIR.absolute()}")
 
 
 # Global detector instance
@@ -68,13 +72,26 @@ async def lifespan(app: FastAPI):
     
     # Use just the model name without .pt - Ultralytics will handle download
     model_name = settings.yolo_model.replace('.pt', '')
+    
+    # Check if CLIP should be enabled (can be disabled for low-memory environments)
+    use_clip = settings.enable_clip
+    
+    if use_clip:
+        print(f"Loading YOLO + CLIP models (CLIP: {settings.clip_model})...")
+    else:
+        print("⚠️  CLIP disabled - using YOLO-only classification (low-memory mode)")
+    
     detector = VehicleDetector(
         model_path=model_name,
         confidence=settings.yolo_confidence,
-        clip_model_name="openai/clip-vit-base-patch32",  # Start with base model
-        use_clip=True
+        clip_model_name=settings.clip_model,
+        use_clip=use_clip
     )
-    print("✅ YOLO and CLIP models loaded successfully!")
+    
+    if use_clip:
+        print("✅ YOLO and CLIP models loaded successfully!")
+    else:
+        print("✅ YOLO model loaded successfully (CLIP disabled)")
     
     # Initialize database
     db = await get_database()

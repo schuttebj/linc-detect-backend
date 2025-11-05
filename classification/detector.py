@@ -12,9 +12,17 @@ import torch
 import torch.nn as nn
 from ultralytics import YOLO
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
 
 from .rules import toll_class, estimate_axles_from_detection
+
+# Lazy import CLIP to avoid loading it if not needed (saves memory)
+try:
+    from transformers import CLIPProcessor, CLIPModel
+    CLIP_AVAILABLE = True
+except ImportError:
+    CLIP_AVAILABLE = False
+    CLIPProcessor = None
+    CLIPModel = None
 
 
 # ============================================================================
@@ -400,6 +408,12 @@ class VehicleDetector:
         Args:
             model_name: CLIP model name (e.g., "openai/clip-vit-base-patch32" or "openai/clip-vit-large-patch14")
         """
+        if not CLIP_AVAILABLE:
+            print("❌ CLIP not available (transformers not installed)")
+            print("⚠️  Falling back to YOLO-based classification")
+            self.use_clip = False
+            return
+        
         print(f"Loading CLIP model: {model_name}")
         try:
             self.clip_model = CLIPModel.from_pretrained(model_name)
