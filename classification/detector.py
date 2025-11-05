@@ -591,7 +591,8 @@ class VehicleDetector:
         
         try:
             # Run detection (Open Images V7 model uses detection, not segmentation)
-            results = self.seg_model(vehicle_crop, conf=0.25, verbose=False)
+            # Lower confidence for wheels since they can be partially occluded
+            results = self.seg_model(vehicle_crop, conf=0.15, verbose=False)
             
             if not results or len(results) == 0:
                 # No detections, use heuristic fallback
@@ -629,9 +630,25 @@ class VehicleDetector:
             boxes = result.boxes
             wheel_boxes = []
             
+            # Debug: show what was detected
+            detected_classes = []
+            for box in boxes:
+                class_id = int(box.cls[0])
+                class_name = class_names.get(class_id, f"class_{class_id}")
+                confidence = float(box.conf[0])
+                detected_classes.append(f"{class_name}({confidence:.2f})")
+            
+            print(f"   🔍 Detected: {', '.join(detected_classes[:5])}")  # Show first 5
+            
+            # Look for ALL wheel-related classes (Wheel, Tire, Bicycle wheel)
+            wheel_class_ids = []
+            for class_id, class_name in class_names.items():
+                if 'wheel' in class_name.lower() or 'tire' in class_name.lower():
+                    wheel_class_ids.append(class_id)
+            
             for i, box in enumerate(boxes):
                 class_id = int(box.cls[0])
-                if class_id == wheel_class_id:
+                if class_id in wheel_class_ids:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = float(box.conf[0])
                     center_x = (x1 + x2) / 2
@@ -644,7 +661,7 @@ class VehicleDetector:
             
             if len(wheel_boxes) == 0:
                 # No wheels detected, use heuristic
-                print(f"   ⚠️  No wheels found (total detections: {len(boxes)})")
+                print(f"   ⚠️  No wheels found in {len(boxes)} detections. Looking for class IDs: {wheel_class_ids}")
                 from classification.rules import estimate_axles_from_detection
                 img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
