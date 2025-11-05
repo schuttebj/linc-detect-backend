@@ -1021,22 +1021,18 @@ class VehicleDetector:
                 vehicle_type
             )
             
-            # Draw wheels on annotated image (if detected)
+            # Store wheel boxes for later drawing (converted to full image coordinates)
+            wheel_boxes_full_img = []
             if wheel_boxes and len(wheel_boxes) > 0:
                 for wheel in wheel_boxes:
-                    # Convert crop coordinates to full image coordinates
-                    wheel_x1 = int(x1 + wheel['x1'])
-                    wheel_y1 = int(y1 + wheel['y1'])
-                    wheel_x2 = int(x1 + wheel['x2'])
-                    wheel_y2 = int(y1 + wheel['y2'])
-                    
-                    # Draw wheel bounding box
-                    cv2.rectangle(annotated_image, (wheel_x1, wheel_y1), (wheel_x2, wheel_y2), (0, 255, 255), 2)  # Yellow for wheels
-                    
-                    # Draw center point
-                    center_x = int(x1 + wheel['center_x'])
-                    center_y = int(y1 + wheel['center_y'])
-                    cv2.circle(annotated_image, (center_x, center_y), 3, (0, 255, 255), -1)
+                    wheel_boxes_full_img.append({
+                        'x1': int(x1 + wheel['x1']),
+                        'y1': int(y1 + wheel['y1']),
+                        'x2': int(x1 + wheel['x2']),
+                        'y2': int(y1 + wheel['y2']),
+                        'center_x': int(x1 + wheel['center_x']),
+                        'center_y': int(y1 + wheel['center_y'])
+                    })
             
             # Determine toll class with refined vehicle type
             predicted_class = toll_class(
@@ -1074,6 +1070,7 @@ class VehicleDetector:
                 "clip_inference_time_ms": clip_inference_time,
                 "clip_model": self.clip_model_name if self.use_clip else None,
                 "axle_detection": axle_debug,
+                "wheel_boxes": wheel_boxes_full_img,  # For drawing wheels on annotated image
                 "debug": {
                     "model_type": "Detection only" if self.use_clip else ("LVIS" if self.is_lvis_model else "COCO"),
                     "class_id": class_id,
@@ -1225,6 +1222,27 @@ class VehicleDetector:
             (0, 0, 0),
             1
         )
+        
+        # Draw detected wheels (if any)
+        wheel_boxes = detection.get("wheel_boxes", [])
+        if wheel_boxes:
+            for wheel in wheel_boxes:
+                # Draw yellow bounding box around wheel
+                cv2.rectangle(
+                    img,
+                    (wheel['x1'], wheel['y1']),
+                    (wheel['x2'], wheel['y2']),
+                    (0, 255, 255),  # Yellow in BGR
+                    2
+                )
+                # Draw center point
+                cv2.circle(
+                    img,
+                    (wheel['center_x'], wheel['center_y']),
+                    3,
+                    (0, 255, 255),  # Yellow in BGR
+                    -1
+                )
         
         return img
 
