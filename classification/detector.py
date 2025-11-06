@@ -653,6 +653,9 @@ class VehicleDetector:
                 if 'wheel' in class_name.lower() or 'tire' in class_name.lower():
                     wheel_class_ids.append(class_id)
             
+            print(f"   📊 Processing {len(boxes)} total detections...")
+            all_wheel_detections = []  # Track all wheels before filtering
+            
             for i, box in enumerate(boxes):
                 class_id = int(box.cls[0])
                 if class_id in wheel_class_ids:
@@ -665,13 +668,23 @@ class VehicleDetector:
                     aspect_ratio = height / width if width > 0 else 999.0
                     area = width * height
                     
+                    # Log ALL wheel detections
+                    all_wheel_detections.append({
+                        'id': i+1,
+                        'conf': confidence,
+                        'ar': aspect_ratio,
+                        'width': width,
+                        'height': height,
+                        'area': area
+                    })
+                    
                     # Filter: Wheels in images are PORTRAIT (taller than wide), not square!
-                    # Good wheels: AR = 0.80 to 2.0 (very permissive for different angles/perspectives)
+                    # Good wheels: AR = 0.75 to 2.5 (VERY permissive for all angles/perspectives)
                     # Bad wheels:
-                    #   - Too tall/thin (far side, heavily occluded): AR > 2.0
-                    #   - Flat/wide (partial, landscape): AR < 0.80
-                    if aspect_ratio > 2.0 or aspect_ratio < 0.80:
-                        print(f"   ⏭️  Skipping bad AR wheel: {aspect_ratio:.2f} (width={width:.0f}, height={height:.0f})")
+                    #   - Too tall/thin (far side, heavily occluded): AR > 2.5
+                    #   - Flat/wide (partial, landscape): AR < 0.75
+                    if aspect_ratio > 2.5 or aspect_ratio < 0.75:
+                        print(f"   ⏭️  AR filter: Wheel #{i+1} AR={aspect_ratio:.2f} ({width:.0f}×{height:.0f}, conf={confidence:.2f})")
                         continue
                     
                     # Convert coordinates back to full crop (add crop_start_y offset)
@@ -690,17 +703,23 @@ class VehicleDetector:
                         'aspect_ratio': float(aspect_ratio)
                     })
             
+            # Log summary of ALL wheel detections before filtering
+            if all_wheel_detections:
+                print(f"   📋 Found {len(all_wheel_detections)} wheel/tire detections:")
+                for det in all_wheel_detections[:10]:  # Show first 10
+                    print(f"      #{det['id']}: AR={det['ar']:.2f}, Area={det['area']:.0f}, Conf={det['conf']:.2f}")
+            
             if len(wheel_boxes) == 0:
                 # No wheels detected, use heuristic
-                print(f"   ⚠️  No wheels found in {len(boxes)} detections. Looking for class IDs: {wheel_class_ids}")
+                print(f"   ⚠️  No wheels passed AR filter! Found {len(all_wheel_detections)} total, but all filtered out.")
                 from classification.rules import estimate_axles_from_detection
                 img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
                 bbox_width = vehicle_crop.shape[1]
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
-                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}, []
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_passed_ar_filter", "total_detections": len(all_wheel_detections)}, []
             
-            print(f"   🔍 Before NMS: {len(wheel_boxes)} wheels")
+            print(f"   ✅ After AR filter: {len(wheel_boxes)}/{len(all_wheel_detections)} wheels passed")
             
             # Apply Non-Maximum Suppression to remove overlapping detections
             # (same wheel detected multiple times)
@@ -721,6 +740,7 @@ class VehicleDetector:
             # NMS: Remove overlapping wheels (IoU > 0.4)
             wheel_boxes_nms = []
             wheel_boxes_sorted_by_conf = sorted(wheel_boxes, key=lambda w: w['confidence'], reverse=True)
+            nms_removed = 0
             
             for wheel in wheel_boxes_sorted_by_conf:
                 # Check if this wheel overlaps with any already accepted wheel
@@ -729,13 +749,15 @@ class VehicleDetector:
                     iou = calculate_iou(wheel, accepted_wheel)
                     if iou > 0.4:  # High overlap = duplicate
                         is_duplicate = True
+                        nms_removed += 1
+                        print(f"      NMS: Removed duplicate (IoU={iou:.2f}, conf={wheel['confidence']:.2f})")
                         break
                 
                 if not is_duplicate:
                     wheel_boxes_nms.append(wheel)
             
             wheel_boxes = wheel_boxes_nms
-            print(f"   ✅ After NMS: {len(wheel_boxes)} wheels")
+            print(f"   ✅ After NMS: {len(wheel_boxes)} wheels (removed {nms_removed} duplicates)")
             
             if len(wheel_boxes) == 0:
                 from classification.rules import estimate_axles_from_detection
@@ -749,17 +771,19 @@ class VehicleDetector:
             areas = sorted([w['area'] for w in wheel_boxes])
             median_area = areas[len(areas) // 2]
             
-            # Filter: Keep wheels with area >= 30% of median (very permissive for distant wheels)
+            # Filter: Keep wheels with area >= 25% of median (very permissive for distant wheels)
             wheel_boxes_size_filtered = []
+            size_filtered_count = 0
             for wheel in wheel_boxes:
                 area_ratio = wheel['area'] / median_area if median_area > 0 else 1.0
-                if area_ratio >= 0.3:  # Keep wheels at least 30% of median size (allows smaller distant wheels)
+                if area_ratio >= 0.25:  # Keep wheels at least 25% of median size (allows even smaller distant wheels)
                     wheel_boxes_size_filtered.append(wheel)
                 else:
-                    print(f"   ⏭️  Skipping tiny wheel: area={wheel['area']:.0f} ({area_ratio*100:.0f}% of median {median_area:.0f})")
+                    size_filtered_count += 1
+                    print(f"      Size filter: Removed tiny wheel area={wheel['area']:.0f} ({area_ratio*100:.0f}% of median)")
             
             wheel_boxes = wheel_boxes_size_filtered
-            print(f"   ✅ After size filter: {len(wheel_boxes)} wheels (median area: {median_area:.0f}px²)")
+            print(f"   ✅ After size filter: {len(wheel_boxes)} wheels (removed {size_filtered_count}, median: {median_area:.0f}px²)")
             
             if len(wheel_boxes) == 0:
                 from classification.rules import estimate_axles_from_detection
