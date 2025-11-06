@@ -660,6 +660,17 @@ class VehicleDetector:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = float(box.conf[0])
                     
+                    # Calculate aspect ratio to filter out partial wheels on far side
+                    width = x2 - x1
+                    height = y2 - y1
+                    aspect_ratio = height / width if width > 0 else 999
+                    
+                    # Filter: Full wheels are roughly circular (aspect ratio ~1.0)
+                    # Partial wheels on far side are tall/thin (aspect ratio > 1.5)
+                    if aspect_ratio > 1.6:
+                        print(f"   ⏭️  Skipping partial wheel (AR={aspect_ratio:.2f})")
+                        continue
+                    
                     # Convert coordinates back to full crop (add crop_start_y offset)
                     y1_full = y1 + crop_start_y
                     y2_full = y2 + crop_start_y
@@ -669,7 +680,8 @@ class VehicleDetector:
                     wheel_boxes.append({
                         'x1': x1, 'y1': y1_full, 'x2': x2, 'y2': y2_full,
                         'center_x': center_x, 'center_y': center_y,
-                        'confidence': confidence
+                        'confidence': confidence,
+                        'aspect_ratio': aspect_ratio
                     })
             
             if len(wheel_boxes) == 0:
@@ -724,10 +736,11 @@ class VehicleDetector:
                 "axle_count": axle_count,
                 "wheels_per_group": [len(g) for g in axle_groups],
                 "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheel_boxes],
-                "confidences": [round(w['confidence'], 2) for w in wheel_boxes]
+                "confidences": [round(w['confidence'], 2) for w in wheel_boxes],
+                "aspect_ratios": [round(w['aspect_ratio'], 2) for w in wheel_boxes]
             }
             
-            print(f"   ✅ Detected {len(wheel_boxes)} wheels in {len(axle_groups)} groups → {axle_count} axles")
+            print(f"   ✅ Detected {len(wheel_boxes)} wheels (AR filtered) in {len(axle_groups)} groups → {axle_count} axles")
             return axle_count, debug_info, wheel_boxes
             
         except Exception as e:
