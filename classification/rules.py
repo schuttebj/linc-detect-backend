@@ -1,11 +1,13 @@
 """
 Toll classification rules based on vehicle type and axle count.
 
-Classification Rules:
-- Class 1: All light vehicles (passenger cars, LDVs/bakkies ≤3.5t, minibuses, motorcycles)
-- Class 2: 2-axle heavy vehicles (i.e., heavy/large vehicles with exactly 2 axles)
-- Class 3: 3-4 axles (any combination where the total is 3 or 4)
-- Class 4: 5+ axles (any combination with five or more)
+Official Classification Rules:
+- Class 1: All light vehicles – motor vehicles other than heavy vehicles.
+           Includes motorcycles, motor tricycles, motor cars, light delivery vehicles 
+           (vehicles with no heavy axle) with or without a trailer.
+- Class 2: Heavy vehicles with 2 axles.
+- Class 3: Heavy vehicles with 3 or 4 axles.
+- Class 4: Heavy vehicles with 5 or more axles.
 
 Enhanced with visual feature analysis to distinguish large SUVs from trucks.
 Works on images from any camera angle without calibration.
@@ -172,30 +174,26 @@ def toll_class(
     vehicle_crop: Optional[np.ndarray] = None
 ) -> str:
     """
-    Enhanced toll classification with refined vehicle types from LVIS-trained YOLO12.
+    Enhanced toll classification with CLIP-based vehicle type detection and wheel-based axle counting.
     
-    Classification Rules:
-    - Class 1: Light vehicles (cars, pickups, motorcycles, bicycles)
-    - Class 2: 2-axle heavy vehicles (delivery vans, box trucks, buses)
-    - Class 3: 3-4 axles (any combination)
-    - Class 4: 5+ axles (heavy articulated vehicles)
+    Official Classification Rules:
+    - Class 1: All light vehicles (cars, pickups, SUVs, motorcycles, light vans with or without trailer)
+    - Class 2: Heavy vehicles with 2 axles (buses, delivery vans, box trucks)
+    - Class 3: Heavy vehicles with 3 or 4 axles
+    - Class 4: Heavy vehicles with 5 or more axles
     
     Args:
-        vehicle_type: Vehicle type from LVIS YOLO12 model (17 classes → 7 core types):
-                     Core types: car, pickup, delivery_van, box_truck, semi, bus, motorcycle
-                     LVIS mapping:
-                       - car: car, taxi, police car, ambulance
-                       - pickup: pickup truck
-                       - delivery_van: minivan
-                       - box_truck: truck, fire truck, garbage truck, tow truck
-                       - semi: semi truck (articulated)
-                       - bus: bus, school bus
-                       - motorcycle: motorcycle, bicycle, motor scooter, dirt bike
-        axle_count: Number of axles detected (from tripline or estimation)
+        vehicle_type: Vehicle type from CLIP model:
+                     Types: car, pickup, suv, van (light_van/heavy_van), 
+                           bus, semitruck, motorcycle, trailer
+                     Van refinement subcategories:
+                       - minivan → light_van (Class 1)
+                       - small/large commercial van → heavy_van (Class 2)
+        axle_count: Number of axles detected (from wheel detection or heuristic estimation)
         has_trailer: Whether a trailer was detected
-        bbox_height: Bounding box height (for 2-axle classification)
-        bbox_width: Bounding box width (for 2-axle classification)
-        image_height: Image height (for 2-axle classification)
+        bbox_height: Bounding box height (for heuristic estimation)
+        bbox_width: Bounding box width (for heuristic estimation)
+        image_height: Image height (for heuristic estimation)
         vehicle_crop: Cropped vehicle image (for visual feature analysis)
     
     Returns:

@@ -781,9 +781,9 @@ class VehicleDetector:
             
             # Group wheels into axles by X-position clustering (horizontal)
             # For side-view vehicles, wheels at same axle are vertically aligned (same X)
-            # Use threshold = 70% of wheel width
+            # Use threshold = 50% of wheel width (tighter for closely-spaced axles)
             axle_groups = []
-            x_threshold = avg_wheel_width * 0.7  # Wheels within 70% of wheel width are on same axle
+            x_threshold = avg_wheel_width * 0.5  # Wheels within 50% of wheel width are on same axle
             
             print(f"   📏 Avg wheel width: {avg_wheel_width:.1f}px, X-threshold: {x_threshold:.1f}px")
             
