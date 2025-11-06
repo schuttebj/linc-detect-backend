@@ -660,17 +660,19 @@ class VehicleDetector:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = float(box.conf[0])
                     
-                    # Calculate aspect ratio to filter out partial wheels
+                    # Calculate aspect ratio and size
                     width = float(x2 - x1)
                     height = float(y2 - y1)
                     aspect_ratio = height / width if width > 0 else 999.0
+                    area = width * height
                     
-                    # Filter: Full wheels are roughly circular (aspect ratio ~0.8-1.3)
-                    # Partial wheels can be:
-                    #   - Tall/thin (far side): AR > 1.6
-                    #   - Flat/wide (occluded): AR < 0.65
-                    if aspect_ratio > 1.6 or aspect_ratio < 0.65:
-                        print(f"   ⏭️  Skipping partial wheel (AR={aspect_ratio:.2f})")
+                    # Filter: Wheels in images are PORTRAIT (taller than wide), not square!
+                    # Good wheels: AR = 1.0 to 1.6 (slightly taller)
+                    # Bad wheels:
+                    #   - Too tall/thin (far side, occluded): AR > 1.7
+                    #   - Flat/wide (partial, landscape): AR < 0.95
+                    if aspect_ratio > 1.7 or aspect_ratio < 0.95:
+                        print(f"   ⏭️  Skipping bad AR wheel: {aspect_ratio:.2f} (width={width:.0f}, height={height:.0f})")
                         continue
                     
                     # Convert coordinates back to full crop (add crop_start_y offset)
@@ -683,6 +685,8 @@ class VehicleDetector:
                     wheel_boxes.append({
                         'x1': float(x1), 'y1': float(y1_full), 'x2': float(x2), 'y2': float(y2_full),
                         'center_x': center_x, 'center_y': center_y,
+                        'width': width, 'height': height,
+                        'area': area,
                         'confidence': confidence,
                         'aspect_ratio': float(aspect_ratio)
                     })
@@ -741,6 +745,30 @@ class VehicleDetector:
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
                 return axles, {"method": "heuristic_fallback", "reason": "no_wheels_after_nms"}, []
             
+            # SIZE-BASED FILTERING: Remove far-side wheels (smaller due to perspective)
+            # Calculate median area (more robust than mean for outliers)
+            areas = sorted([w['area'] for w in wheel_boxes])
+            median_area = areas[len(areas) // 2]
+            
+            # Filter: Keep wheels with area >= 50% of median (far-side wheels are much smaller)
+            wheel_boxes_size_filtered = []
+            for wheel in wheel_boxes:
+                area_ratio = wheel['area'] / median_area if median_area > 0 else 1.0
+                if area_ratio >= 0.5:  # Keep wheels at least 50% of median size
+                    wheel_boxes_size_filtered.append(wheel)
+                else:
+                    print(f"   ⏭️  Skipping small wheel: area={wheel['area']:.0f} ({area_ratio*100:.0f}% of median {median_area:.0f})")
+            
+            wheel_boxes = wheel_boxes_size_filtered
+            print(f"   ✅ After size filter: {len(wheel_boxes)} wheels (median area: {median_area:.0f}px²)")
+            
+            if len(wheel_boxes) == 0:
+                from classification.rules import estimate_axles_from_detection
+                bbox_height = vehicle_crop.shape[0]
+                bbox_width = vehicle_crop.shape[1]
+                axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_after_size_filter"}, []
+            
             # Strategy: For horizontal vehicles (side view), wheels are spread horizontally
             # Group wheels by X-position (horizontal) to identify axles
             # Each vertical column of wheels = one axle
@@ -749,7 +777,7 @@ class VehicleDetector:
             wheel_boxes_sorted = sorted(wheel_boxes, key=lambda w: w['center_x'])
             
             # Calculate average wheel width for dynamic threshold
-            avg_wheel_width = sum((w['x2'] - w['x1']) for w in wheel_boxes) / len(wheel_boxes)
+            avg_wheel_width = sum((w['width']) for w in wheel_boxes) / len(wheel_boxes)
             
             # Group wheels into axles by X-position clustering (horizontal)
             # For side-view vehicles, wheels at same axle are vertically aligned (same X)
@@ -783,6 +811,19 @@ class VehicleDetector:
             # Cap at reasonable maximum (some trucks can have 5-6 axles)
             axle_count = min(axle_count, 10)
             
+            # Prepare detailed wheel information for debugging
+            wheel_details = []
+            for i, wheel in enumerate(wheel_boxes):
+                wheel_details.append({
+                    "id": i + 1,
+                    "center": [int(wheel['center_x']), int(wheel['center_y'])],
+                    "bbox": [int(wheel['x1']), int(wheel['y1']), int(wheel['x2']), int(wheel['y2'])],
+                    "dimensions": {"width": round(wheel['width'], 1), "height": round(wheel['height'], 1)},
+                    "area": round(wheel['area'], 1),
+                    "aspect_ratio": round(wheel['aspect_ratio'], 2),
+                    "confidence": round(wheel['confidence'], 2)
+                })
+            
             debug_info = {
                 "method": "wheel_detection_x_clustering",
                 "total_wheels_detected": len(wheel_boxes),
@@ -792,11 +833,16 @@ class VehicleDetector:
                 "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheel_boxes],
                 "confidences": [round(w['confidence'], 2) for w in wheel_boxes],
                 "aspect_ratios": [round(w['aspect_ratio'], 2) for w in wheel_boxes],
+                "areas": [round(w['area'], 1) for w in wheel_boxes],
+                "widths": [round(w['width'], 1) for w in wheel_boxes],
+                "heights": [round(w['height'], 1) for w in wheel_boxes],
                 "x_threshold": round(x_threshold, 1),
-                "avg_wheel_width": round(avg_wheel_width, 1)
+                "avg_wheel_width": round(avg_wheel_width, 1),
+                "median_area": round(median_area, 1),
+                "wheel_details": wheel_details  # Detailed per-wheel info
             }
             
-            print(f"   ✅ Detected {len(wheel_boxes)} wheels (NMS+AR filtered) in {len(axle_groups)} groups → {axle_count} axles")
+            print(f"   ✅ Final: {len(wheel_boxes)} wheels in {len(axle_groups)} groups → {axle_count} axles")
             return axle_count, debug_info, wheel_boxes
             
         except Exception as e:
