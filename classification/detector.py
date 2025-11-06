@@ -697,31 +697,75 @@ class VehicleDetector:
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
                 return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}, []
             
-            # Strategy: Count ALL detected wheels (no ground filtering)
-            # Assumption: We see vehicle from side, so visible wheels ≈ number of axles
-            # Group wheels by Y-position to identify axles
+            print(f"   🔍 Before NMS: {len(wheel_boxes)} wheels")
             
-            # Sort wheels by Y position
-            wheel_boxes_sorted = sorted(wheel_boxes, key=lambda w: w['center_y'])
+            # Apply Non-Maximum Suppression to remove overlapping detections
+            # (same wheel detected multiple times)
+            def calculate_iou(box1, box2):
+                """Calculate Intersection over Union between two boxes"""
+                x1 = max(box1['x1'], box2['x1'])
+                y1 = max(box1['y1'], box2['y1'])
+                x2 = min(box1['x2'], box2['x2'])
+                y2 = min(box1['y2'], box2['y2'])
+                
+                intersection = max(0, x2 - x1) * max(0, y2 - y1)
+                area1 = (box1['x2'] - box1['x1']) * (box1['y2'] - box1['y1'])
+                area2 = (box2['x2'] - box2['x1']) * (box2['y2'] - box2['y1'])
+                union = area1 + area2 - intersection
+                
+                return intersection / union if union > 0 else 0
             
-            # Calculate average wheel height for dynamic threshold
-            avg_wheel_height = sum((w['y2'] - w['y1']) for w in wheel_boxes) / len(wheel_boxes)
+            # NMS: Remove overlapping wheels (IoU > 0.4)
+            wheel_boxes_nms = []
+            wheel_boxes_sorted_by_conf = sorted(wheel_boxes, key=lambda w: w['confidence'], reverse=True)
             
-            # Group wheels into axles by Y-position clustering
-            # Use threshold = 40% of wheel height (tighter clustering to separate close axles)
+            for wheel in wheel_boxes_sorted_by_conf:
+                # Check if this wheel overlaps with any already accepted wheel
+                is_duplicate = False
+                for accepted_wheel in wheel_boxes_nms:
+                    iou = calculate_iou(wheel, accepted_wheel)
+                    if iou > 0.4:  # High overlap = duplicate
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    wheel_boxes_nms.append(wheel)
+            
+            wheel_boxes = wheel_boxes_nms
+            print(f"   ✅ After NMS: {len(wheel_boxes)} wheels")
+            
+            if len(wheel_boxes) == 0:
+                from classification.rules import estimate_axles_from_detection
+                bbox_height = vehicle_crop.shape[0]
+                bbox_width = vehicle_crop.shape[1]
+                axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
+                return axles, {"method": "heuristic_fallback", "reason": "no_wheels_after_nms"}, []
+            
+            # Strategy: For horizontal vehicles (side view), wheels are spread horizontally
+            # Group wheels by X-position (horizontal) to identify axles
+            # Each vertical column of wheels = one axle
+            
+            # Sort wheels by X position (left to right)
+            wheel_boxes_sorted = sorted(wheel_boxes, key=lambda w: w['center_x'])
+            
+            # Calculate average wheel width for dynamic threshold
+            avg_wheel_width = sum((w['x2'] - w['x1']) for w in wheel_boxes) / len(wheel_boxes)
+            
+            # Group wheels into axles by X-position clustering (horizontal)
+            # For side-view vehicles, wheels at same axle are vertically aligned (same X)
+            # Use threshold = 70% of wheel width
             axle_groups = []
-            y_threshold = avg_wheel_height * 0.4  # Wheels within 40% of wheel height are on same axle
+            x_threshold = avg_wheel_width * 0.7  # Wheels within 70% of wheel width are on same axle
             
-            print(f"   📏 Avg wheel height: {avg_wheel_height:.1f}px, Y-threshold: {y_threshold:.1f}px")
+            print(f"   📏 Avg wheel width: {avg_wheel_width:.1f}px, X-threshold: {x_threshold:.1f}px")
             
             for wheel in wheel_boxes_sorted:
                 # Try to add to existing axle group
                 added = False
                 for group in axle_groups:
-                    # IMPORTANT: Compare to the FIRST wheel in group, not average
-                    # This prevents "drift" where threshold expands as wheels are added
-                    first_wheel_y = group[0]['center_y']
-                    if abs(wheel['center_y'] - first_wheel_y) < y_threshold:
+                    # Compare X positions: wheels at same horizontal position = same axle
+                    first_wheel_x = group[0]['center_x']
+                    if abs(wheel['center_x'] - first_wheel_x) < x_threshold:
                         group.append(wheel)
                         added = True
                         break
@@ -740,7 +784,7 @@ class VehicleDetector:
             axle_count = min(axle_count, 10)
             
             debug_info = {
-                "method": "wheel_detection_clustering",
+                "method": "wheel_detection_x_clustering",
                 "total_wheels_detected": len(wheel_boxes),
                 "axle_groups": len(axle_groups),
                 "axle_count": axle_count,
@@ -748,11 +792,11 @@ class VehicleDetector:
                 "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheel_boxes],
                 "confidences": [round(w['confidence'], 2) for w in wheel_boxes],
                 "aspect_ratios": [round(w['aspect_ratio'], 2) for w in wheel_boxes],
-                "y_threshold": round(y_threshold, 1),
-                "avg_wheel_height": round(avg_wheel_height, 1)
+                "x_threshold": round(x_threshold, 1),
+                "avg_wheel_width": round(avg_wheel_width, 1)
             }
             
-            print(f"   ✅ Detected {len(wheel_boxes)} wheels (AR filtered) in {len(axle_groups)} groups → {axle_count} axles")
+            print(f"   ✅ Detected {len(wheel_boxes)} wheels (NMS+AR filtered) in {len(axle_groups)} groups → {axle_count} axles")
             return axle_count, debug_info, wheel_boxes
             
         except Exception as e:
