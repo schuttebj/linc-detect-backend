@@ -660,14 +660,16 @@ class VehicleDetector:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = float(box.conf[0])
                     
-                    # Calculate aspect ratio to filter out partial wheels on far side
+                    # Calculate aspect ratio to filter out partial wheels
                     width = float(x2 - x1)
                     height = float(y2 - y1)
                     aspect_ratio = height / width if width > 0 else 999.0
                     
-                    # Filter: Full wheels are roughly circular (aspect ratio ~1.0)
-                    # Partial wheels on far side are tall/thin (aspect ratio > 1.5)
-                    if aspect_ratio > 1.6:
+                    # Filter: Full wheels are roughly circular (aspect ratio ~0.8-1.3)
+                    # Partial wheels can be:
+                    #   - Tall/thin (far side): AR > 1.6
+                    #   - Flat/wide (occluded): AR < 0.65
+                    if aspect_ratio > 1.6 or aspect_ratio < 0.65:
                         print(f"   ⏭️  Skipping partial wheel (AR={aspect_ratio:.2f})")
                         continue
                     
@@ -706,9 +708,9 @@ class VehicleDetector:
             avg_wheel_height = sum((w['y2'] - w['y1']) for w in wheel_boxes) / len(wheel_boxes)
             
             # Group wheels into axles by Y-position clustering
-            # Use threshold = 60% of wheel height (allows some vertical variation but separates axles)
+            # Use threshold = 40% of wheel height (tighter clustering to separate close axles)
             axle_groups = []
-            y_threshold = avg_wheel_height * 0.6  # Wheels within 60% of wheel height are on same axle
+            y_threshold = avg_wheel_height * 0.4  # Wheels within 40% of wheel height are on same axle
             
             print(f"   📏 Avg wheel height: {avg_wheel_height:.1f}px, Y-threshold: {y_threshold:.1f}px")
             
@@ -716,9 +718,10 @@ class VehicleDetector:
                 # Try to add to existing axle group
                 added = False
                 for group in axle_groups:
-                    # Check if wheel's Y is close to group's average Y
-                    avg_y = sum(w['center_y'] for w in group) / len(group)
-                    if abs(wheel['center_y'] - avg_y) < y_threshold:
+                    # IMPORTANT: Compare to the FIRST wheel in group, not average
+                    # This prevents "drift" where threshold expands as wheels are added
+                    first_wheel_y = group[0]['center_y']
+                    if abs(wheel['center_y'] - first_wheel_y) < y_threshold:
                         group.append(wheel)
                         added = True
                         break
