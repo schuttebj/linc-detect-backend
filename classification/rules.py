@@ -20,7 +20,7 @@ import cv2
 # Vehicle type categories (CLIP types) - South African toll classification
 LIGHT_TYPES = {"car", "pickup", "suv", "light_van", "motorcycle"}  # Class 1
 HEAVY_2AXLE_TYPES = {"van", "heavy_van", "bus"}  # Class 2 (2-axle heavy) - vans default to heavy unless refined
-HEAVY_MULTAXLE_TYPES = {"semi", "semitruck", "trailer"}  # Class 3-4 (3+ axles)
+HEAVY_MULTAXLE_TYPES = {"semi", "semitruck"}  # Class 3-4 (3+ axles)
 
 # Thresholds for visual feature analysis
 BOXINESS_THRESHOLD = 0.18        # Edge density in rectangular regions (higher = stricter)
@@ -185,7 +185,7 @@ def toll_class(
     Args:
         vehicle_type: Vehicle type from CLIP model:
                      Types: car, pickup, suv, van (light_van/heavy_van), 
-                           bus, semitruck, motorcycle, trailer
+                           bus, semitruck, motorcycle
                      Van refinement subcategories:
                        - minivan → light_van (Class 1)
                        - small/large commercial van → heavy_van (Class 2)

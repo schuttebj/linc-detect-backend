@@ -39,8 +39,7 @@ CLIP_VEHICLE_LABELS = [
     "a photo of a van",
     "a photo of a bus",
     "a photo of a semitruck",
-    "a photo of a motorcycle",
-    "a photo of a trailer"
+    "a photo of a motorcycle"
 ]
 
 # For two-round refinement (optional future enhancement)
@@ -74,8 +73,7 @@ CLIP_TO_VEHICLE_TYPE = {
     "van": "van",
     "bus": "bus",
     "semitruck": "semi",
-    "motorcycle": "motorcycle",
-    "trailer": "trailer"
+    "motorcycle": "motorcycle"
 }
 
 # Van subcategory mapping (for two-round refinement)
@@ -601,7 +599,8 @@ class VehicleDetector:
             
             # Run detection with very low confidence to catch all wheels
             # Open Images V7 model uses detection, not segmentation
-            results = self.seg_model(bottom_half, conf=0.08, verbose=False)
+            # Use conf=0.05 to catch wheels with low visibility/partial occlusion
+            results = self.seg_model(bottom_half, conf=0.05, verbose=False)
             
             if not results or len(results) == 0:
                 # No detections, use heuristic fallback
@@ -667,11 +666,11 @@ class VehicleDetector:
                     area = width * height
                     
                     # Filter: Wheels in images are PORTRAIT (taller than wide), not square!
-                    # Good wheels: AR = 1.0 to 1.6 (slightly taller)
+                    # Good wheels: AR = 0.90 to 1.8 (allow variation in angles/perspectives)
                     # Bad wheels:
-                    #   - Too tall/thin (far side, occluded): AR > 1.7
-                    #   - Flat/wide (partial, landscape): AR < 0.95
-                    if aspect_ratio > 1.7 or aspect_ratio < 0.95:
+                    #   - Too tall/thin (far side, heavily occluded): AR > 1.8
+                    #   - Flat/wide (partial, landscape): AR < 0.90
+                    if aspect_ratio > 1.8 or aspect_ratio < 0.90:
                         print(f"   ⏭️  Skipping bad AR wheel: {aspect_ratio:.2f} (width={width:.0f}, height={height:.0f})")
                         continue
                     
