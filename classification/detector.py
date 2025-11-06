@@ -599,8 +599,8 @@ class VehicleDetector:
             
             # Run detection with very low confidence to catch all wheels
             # Open Images V7 model uses detection, not segmentation
-            # Use conf=0.05 to catch wheels with low visibility/partial occlusion
-            results = self.seg_model(bottom_half, conf=0.05, verbose=False)
+            # Use conf=0.03 (3%) - very aggressive to catch all wheels including occluded ones
+            results = self.seg_model(bottom_half, conf=0.03, verbose=False)
             
             if not results or len(results) == 0:
                 # No detections, use heuristic fallback
@@ -666,11 +666,11 @@ class VehicleDetector:
                     area = width * height
                     
                     # Filter: Wheels in images are PORTRAIT (taller than wide), not square!
-                    # Good wheels: AR = 0.90 to 1.8 (allow variation in angles/perspectives)
+                    # Good wheels: AR = 0.80 to 2.0 (very permissive for different angles/perspectives)
                     # Bad wheels:
-                    #   - Too tall/thin (far side, heavily occluded): AR > 1.8
-                    #   - Flat/wide (partial, landscape): AR < 0.90
-                    if aspect_ratio > 1.8 or aspect_ratio < 0.90:
+                    #   - Too tall/thin (far side, heavily occluded): AR > 2.0
+                    #   - Flat/wide (partial, landscape): AR < 0.80
+                    if aspect_ratio > 2.0 or aspect_ratio < 0.80:
                         print(f"   ⏭️  Skipping bad AR wheel: {aspect_ratio:.2f} (width={width:.0f}, height={height:.0f})")
                         continue
                     
@@ -749,14 +749,14 @@ class VehicleDetector:
             areas = sorted([w['area'] for w in wheel_boxes])
             median_area = areas[len(areas) // 2]
             
-            # Filter: Keep wheels with area >= 50% of median (far-side wheels are much smaller)
+            # Filter: Keep wheels with area >= 30% of median (very permissive for distant wheels)
             wheel_boxes_size_filtered = []
             for wheel in wheel_boxes:
                 area_ratio = wheel['area'] / median_area if median_area > 0 else 1.0
-                if area_ratio >= 0.5:  # Keep wheels at least 50% of median size
+                if area_ratio >= 0.3:  # Keep wheels at least 30% of median size (allows smaller distant wheels)
                     wheel_boxes_size_filtered.append(wheel)
                 else:
-                    print(f"   ⏭️  Skipping small wheel: area={wheel['area']:.0f} ({area_ratio*100:.0f}% of median {median_area:.0f})")
+                    print(f"   ⏭️  Skipping tiny wheel: area={wheel['area']:.0f} ({area_ratio*100:.0f}% of median {median_area:.0f})")
             
             wheel_boxes = wheel_boxes_size_filtered
             print(f"   ✅ After size filter: {len(wheel_boxes)} wheels (median area: {median_area:.0f}px²)")
