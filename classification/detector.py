@@ -661,9 +661,9 @@ class VehicleDetector:
                     confidence = float(box.conf[0])
                     
                     # Calculate aspect ratio to filter out partial wheels on far side
-                    width = x2 - x1
-                    height = y2 - y1
-                    aspect_ratio = height / width if width > 0 else 999
+                    width = float(x2 - x1)
+                    height = float(y2 - y1)
+                    aspect_ratio = height / width if width > 0 else 999.0
                     
                     # Filter: Full wheels are roughly circular (aspect ratio ~1.0)
                     # Partial wheels on far side are tall/thin (aspect ratio > 1.5)
@@ -672,16 +672,17 @@ class VehicleDetector:
                         continue
                     
                     # Convert coordinates back to full crop (add crop_start_y offset)
-                    y1_full = y1 + crop_start_y
-                    y2_full = y2 + crop_start_y
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1_full + y2_full) / 2
+                    # Convert all numpy types to Python types for JSON serialization
+                    y1_full = float(y1) + crop_start_y
+                    y2_full = float(y2) + crop_start_y
+                    center_x = float((x1 + x2) / 2)
+                    center_y = float((y1_full + y2_full) / 2)
                     
                     wheel_boxes.append({
-                        'x1': x1, 'y1': y1_full, 'x2': x2, 'y2': y2_full,
+                        'x1': float(x1), 'y1': float(y1_full), 'x2': float(x2), 'y2': float(y2_full),
                         'center_x': center_x, 'center_y': center_y,
                         'confidence': confidence,
-                        'aspect_ratio': aspect_ratio
+                        'aspect_ratio': float(aspect_ratio)
                     })
             
             if len(wheel_boxes) == 0:
@@ -701,9 +702,15 @@ class VehicleDetector:
             # Sort wheels by Y position
             wheel_boxes_sorted = sorted(wheel_boxes, key=lambda w: w['center_y'])
             
+            # Calculate average wheel height for dynamic threshold
+            avg_wheel_height = sum((w['y2'] - w['y1']) for w in wheel_boxes) / len(wheel_boxes)
+            
             # Group wheels into axles by Y-position clustering
+            # Use threshold = 60% of wheel height (allows some vertical variation but separates axles)
             axle_groups = []
-            y_threshold = img_height * 0.08  # Wheels within 8% height are on same axle
+            y_threshold = avg_wheel_height * 0.6  # Wheels within 60% of wheel height are on same axle
+            
+            print(f"   📏 Avg wheel height: {avg_wheel_height:.1f}px, Y-threshold: {y_threshold:.1f}px")
             
             for wheel in wheel_boxes_sorted:
                 # Try to add to existing axle group
@@ -737,7 +744,9 @@ class VehicleDetector:
                 "wheels_per_group": [len(g) for g in axle_groups],
                 "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheel_boxes],
                 "confidences": [round(w['confidence'], 2) for w in wheel_boxes],
-                "aspect_ratios": [round(w['aspect_ratio'], 2) for w in wheel_boxes]
+                "aspect_ratios": [round(w['aspect_ratio'], 2) for w in wheel_boxes],
+                "y_threshold": round(y_threshold, 1),
+                "avg_wheel_height": round(avg_wheel_height, 1)
             }
             
             print(f"   ✅ Detected {len(wheel_boxes)} wheels (AR filtered) in {len(axle_groups)} groups → {axle_count} axles")
