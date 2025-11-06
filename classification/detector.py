@@ -591,15 +591,22 @@ class VehicleDetector:
             return axles, {"method": "heuristic", "wheels_detected": 0, "reason": "model_not_loaded"}, []
         
         try:
-            # Run detection (Open Images V7 model uses detection, not segmentation)
-            # Lower confidence for wheels since they can be partially occluded
-            results = self.seg_model(vehicle_crop, conf=0.15, verbose=False)
+            # OPTIMIZATION: Only search bottom 50% of vehicle crop (wheels are always in lower half)
+            img_height = vehicle_crop.shape[0]
+            img_width = vehicle_crop.shape[1]
+            crop_start_y = img_height // 2
+            bottom_half = vehicle_crop[crop_start_y:, :, :]
+            
+            print(f"   🔍 Searching for wheels in bottom 50% of crop ({bottom_half.shape[0]}x{bottom_half.shape[1]})")
+            
+            # Run detection with very low confidence to catch all wheels
+            # Open Images V7 model uses detection, not segmentation
+            results = self.seg_model(bottom_half, conf=0.08, verbose=False)
             
             if not results or len(results) == 0:
                 # No detections, use heuristic fallback
                 print(f"   ⚠️  Wheel detection returned no results")
                 from classification.rules import estimate_axles_from_detection
-                img_height = vehicle_crop.shape[0]
                 bbox_height = vehicle_crop.shape[0]
                 bbox_width = vehicle_crop.shape[1]
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
@@ -652,10 +659,15 @@ class VehicleDetector:
                 if class_id in wheel_class_ids:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = float(box.conf[0])
+                    
+                    # Convert coordinates back to full crop (add crop_start_y offset)
+                    y1_full = y1 + crop_start_y
+                    y2_full = y2 + crop_start_y
                     center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
+                    center_y = (y1_full + y2_full) / 2
+                    
                     wheel_boxes.append({
-                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                        'x1': x1, 'y1': y1_full, 'x2': x2, 'y2': y2_full,
                         'center_x': center_x, 'center_y': center_y,
                         'confidence': confidence
                     })
@@ -670,53 +682,53 @@ class VehicleDetector:
                 axles = estimate_axles_from_detection(vehicle_type, bbox_height, bbox_width, img_height)
                 return axles, {"method": "heuristic_fallback", "reason": "no_wheels_found", "total_detections": len(boxes)}, []
             
-            # Filter wheels touching the ground
-            # Ground is defined as bottom 15% of the image
-            img_height = vehicle_crop.shape[0]
-            ground_threshold = img_height * 0.85  # Wheels with center_y >= this are on ground
+            # Strategy: Count ALL detected wheels (no ground filtering)
+            # Assumption: We see vehicle from side, so visible wheels ≈ number of axles
+            # Group wheels by Y-position to identify axles
             
-            wheels_on_ground = [
-                w for w in wheel_boxes 
-                if w['center_y'] >= ground_threshold
-            ]
+            # Sort wheels by Y position
+            wheel_boxes_sorted = sorted(wheel_boxes, key=lambda w: w['center_y'])
             
-            # If no wheels on ground detected, be more lenient (bottom 25%)
-            if len(wheels_on_ground) == 0:
-                ground_threshold = img_height * 0.75
-                wheels_on_ground = [
-                    w for w in wheel_boxes 
-                    if w['center_y'] >= ground_threshold
-                ]
+            # Group wheels into axles by Y-position clustering
+            axle_groups = []
+            y_threshold = img_height * 0.08  # Wheels within 8% height are on same axle
             
-            # Count axles (2 wheels per axle, but account for occlusion)
-            wheels_count = len(wheels_on_ground)
+            for wheel in wheel_boxes_sorted:
+                # Try to add to existing axle group
+                added = False
+                for group in axle_groups:
+                    # Check if wheel's Y is close to group's average Y
+                    avg_y = sum(w['center_y'] for w in group) / len(group)
+                    if abs(wheel['center_y'] - avg_y) < y_threshold:
+                        group.append(wheel)
+                        added = True
+                        break
+                
+                if not added:
+                    # Create new axle group
+                    axle_groups.append([wheel])
             
-            if wheels_count == 0:
-                # No wheels on ground, use all detected wheels
-                wheels_count = len(wheel_boxes)
+            # Count axles based on groups
+            axle_count = len(axle_groups)
             
-            # Estimate axles
-            if wheels_count <= 2:
-                axle_count = max(2, wheels_count)  # Minimum 2 axles for any vehicle
-            else:
-                # Each axle has 2 wheels, but we might only see some due to occlusion
-                # Round up to account for hidden wheels
-                axle_count = (wheels_count + 1) // 2
+            # Minimum 2 axles for any vehicle
+            axle_count = max(2, axle_count)
             
-            # Cap at reasonable maximum
-            axle_count = min(axle_count, 6)
+            # Cap at reasonable maximum (some trucks can have 5-6 axles)
+            axle_count = min(axle_count, 10)
             
             debug_info = {
-                "method": "wheel_detection",
+                "method": "wheel_detection_clustering",
                 "total_wheels_detected": len(wheel_boxes),
-                "wheels_on_ground": len(wheels_on_ground),
+                "axle_groups": len(axle_groups),
                 "axle_count": axle_count,
-                "ground_threshold": ground_threshold,
-                "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheels_on_ground[:6]]  # First 6 for debugging
+                "wheels_per_group": [len(g) for g in axle_groups],
+                "wheel_positions": [[int(w['center_x']), int(w['center_y'])] for w in wheel_boxes],
+                "confidences": [round(w['confidence'], 2) for w in wheel_boxes]
             }
             
-            print(f"   ✅ Detected {len(wheel_boxes)} wheels, {len(wheels_on_ground)} on ground → {axle_count} axles")
-            return axle_count, debug_info, wheels_on_ground
+            print(f"   ✅ Detected {len(wheel_boxes)} wheels in {len(axle_groups)} groups → {axle_count} axles")
+            return axle_count, debug_info, wheel_boxes
             
         except Exception as e:
             print(f"❌ Wheel detection failed: {e}")
