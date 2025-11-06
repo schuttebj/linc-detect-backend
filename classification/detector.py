@@ -1165,11 +1165,28 @@ class VehicleDetector:
                 vehicle_type = "unknown"
                 print(f"   ⚠️ CLIP disabled")
             
-            # Count axles using wheel detection (with heuristic fallback)
-            estimated_axles, axle_debug, wheel_boxes = self.detect_wheels_and_count_axles(
-                vehicle_crop,
-                vehicle_type
-            )
+            # Axle counting logic: Only count axles for heavy vehicles
+            # Light vehicles are ALWAYS Class 1 regardless of axle count
+            from classification.rules import LIGHT_TYPES
+            
+            if vehicle_type in LIGHT_TYPES:
+                # Light vehicle (car, pickup, SUV, motorcycle, light_van/minivan)
+                # Always Class 1, skip expensive wheel detection
+                estimated_axles = 2  # Default for light vehicles
+                axle_debug = {
+                    "method": "light_vehicle_skip",
+                    "reason": "Light vehicles always Class 1, axle count not needed"
+                }
+                wheel_boxes = []
+                print(f"   ⏭️  Light vehicle ({vehicle_type}): Skipping wheel detection (always Class 1)")
+            else:
+                # Heavy vehicle (bus, van, heavy_van, semitruck)
+                # Axle count determines Class 2, 3, or 4
+                print(f"   🔧 Heavy vehicle ({vehicle_type}): Counting axles for classification...")
+                estimated_axles, axle_debug, wheel_boxes = self.detect_wheels_and_count_axles(
+                    vehicle_crop,
+                    vehicle_type
+                )
             
             # Store wheel boxes for later drawing (converted to full image coordinates)
             wheel_boxes_full_img = []

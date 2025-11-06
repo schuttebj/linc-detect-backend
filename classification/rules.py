@@ -222,10 +222,15 @@ def toll_class(
         # Heavy vehicle with 3-4 axles (larger fire trucks, garbage trucks) → Class 3
         return "Class 3"
     
-    # PRIORITY 3: Two-axle classification (critical distinction for SA toll)
+    # PRIORITY 3: Light vehicles are ALWAYS Class 1 (regardless of axle count)
+    # This includes light vehicles with trailers (e.g., bakkie + trailer)
+    if vt in LIGHT_TYPES:
+        return "Class 1"
+    
+    # PRIORITY 4: Two-axle classification for heavy vehicles (critical distinction for SA toll)
     if axle_count == 2:
-        # Class 1: Light vehicles (cars, bakkies, SUVs, light vans, motorcycles)
-        # These are private/light delivery vehicles under 3.5 tons
+        # Class 1: Should have been caught above
+        # This is a fallback for unknown light vehicles
         if vt in LIGHT_TYPES:
             return "Class 1"
         
@@ -238,7 +243,7 @@ def toll_class(
         # (Better to under-charge than over-charge)
         return "Class 1"
     
-    # PRIORITY 4: Unknown axle count - use vehicle type hints
+    # PRIORITY 5: Unknown axle count - use vehicle type hints
     # Light vehicles (assume 2 axles) → Class 1
     if vt in LIGHT_TYPES:
         return "Class 1"
